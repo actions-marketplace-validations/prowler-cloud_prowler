@@ -86,7 +86,7 @@ repos:
 
   ## PYTHON — Poetry
   - repo: https://github.com/python-poetry/poetry
-    rev: 2.3.4
+    rev: 2.4.1
     hooks:
       - id: poetry-check
         name: API - poetry-check
