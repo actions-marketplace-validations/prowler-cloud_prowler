@@ -1,10 +1,9 @@
 "use client";
 
 import { ChevronDown } from "lucide-react";
+import type { ReactNode } from "react";
 import { useState } from "react";
 
-import { AccountsSelector } from "@/app/(prowler)/_overview/_components/accounts-selector";
-import { ProviderTypeSelector } from "@/app/(prowler)/_overview/_components/provider-type-selector";
 import { ApplyFiltersButton } from "@/components/filters/apply-filters-button";
 import { BatchFiltersLayout } from "@/components/filters/batch-filters-layout";
 import { ClearFiltersButton } from "@/components/filters/clear-filters-button";
@@ -14,23 +13,30 @@ import {
   FilterChip,
   FilterSummaryStrip,
 } from "@/components/filters/filter-summary-strip";
+import { ProviderAccountSelectors } from "@/components/filters/provider-account-selectors";
+import { ProviderGroupSelector } from "@/components/filters/provider-group-selector";
 import { Button } from "@/components/shadcn";
-import { ExpandableSection } from "@/components/ui/expandable-section";
-import { DataTableFilterCustom } from "@/components/ui/table";
+import { ExpandableSection } from "@/components/shadcn/expandable-section";
+import { DataTableFilterCustom } from "@/components/shadcn/table/data-table-filter-custom";
 import { useFilterBatch } from "@/hooks/use-filter-batch";
 import { getCategoryLabel, getGroupLabel } from "@/lib/categories";
-import { FilterType, ScanEntity } from "@/types";
+import { FILTER_FIELD, ScanEntity } from "@/types";
+import { ProviderGroup } from "@/types/components";
 import { DATA_TABLE_FILTER_MODE } from "@/types/filters";
 import { ProviderProps } from "@/types/providers";
 
 import {
+  buildFindingGroupFilterOption,
   buildFindingsFilterChips,
+  type FindingCheckFilterOption,
   getFindingsFilterDisplayValue,
 } from "./findings-filters.utils";
 
 interface FindingsFiltersProps {
-  /** Provider data for ProviderTypeSelector and AccountsSelector */
+  /** Provider data for provider/account filter controls. */
   providers: ProviderProps[];
+  /** Provider groups for the provider group filter control. */
+  providerGroups?: ProviderGroup[];
   completedScanIds: string[];
   scanDetails: { [key: string]: ScanEntity }[];
   uniqueRegions: string[];
@@ -38,6 +44,24 @@ interface FindingsFiltersProps {
   uniqueResourceTypes: string[];
   uniqueCategories: string[];
   uniqueGroups: string[];
+  checkOptions?: FindingCheckFilterOption[];
+  trailingControls?: ReactNode;
+  variant?: "default" | "alerts-edit";
+}
+
+interface FindingsFilterBatchControlsProps extends FindingsFiltersProps {
+  appliedFilters: Record<string, string[]>;
+  pendingFilters: Record<string, string[]>;
+  changedFilters: Record<string, string[]>;
+  setPending: (filterKey: string, values: string[]) => void;
+  applyAll?: () => void;
+  discardAll?: () => void;
+  clearAndApply?: () => void;
+  removeAppliedAndApply?: (filterKey: string, value?: string) => void;
+  hasChanges?: boolean;
+  changeCount?: number;
+  getFilterValue: (filterKey: string) => string[];
+  showSummaries?: boolean;
 }
 
 const countVisibleFilterKeys = (filters: Record<string, string[]>): number =>
@@ -47,8 +71,17 @@ const countVisibleFilterKeys = (filters: Record<string, string[]>): number =>
     return true;
   }).length;
 
-export const FindingsFilters = ({
+const FILTER_CONTROL_COLUMN_CLASS =
+  "min-w-0 flex-none basis-full sm:basis-[calc((100%_-_0.75rem)/2)] lg:basis-[calc((100%_-_1.5rem)/3)] xl:basis-[calc((100%_-_2.25rem)/4)] 2xl:basis-[calc((100%_-_3rem)/5)]";
+const FILTER_GRID_ITEM_CLASS = "min-w-0";
+const FINDING_GROUP_FILTER_KEYS = ["filter[check_id]", "filter[check_id__in]"];
+
+export const FindingsFilterBatchControls = ({
   providers,
+  // Undefined = caller opted out (the alert editor shares this component but
+  // loads no groups); an empty array still renders the control, so it stays
+  // visible even when a tenant has no groups yet.
+  providerGroups,
   completedScanIds,
   scanDetails,
   uniqueRegions,
@@ -56,80 +89,103 @@ export const FindingsFilters = ({
   uniqueResourceTypes,
   uniqueCategories,
   uniqueGroups,
-}: FindingsFiltersProps) => {
+  checkOptions = [],
+  trailingControls,
+  appliedFilters,
+  pendingFilters,
+  changedFilters,
+  setPending,
+  applyAll,
+  discardAll,
+  clearAndApply,
+  removeAppliedAndApply,
+  hasChanges = false,
+  changeCount = 0,
+  getFilterValue,
+  showSummaries = true,
+  variant = "default",
+}: FindingsFilterBatchControlsProps) => {
   const [isExpanded, setIsExpanded] = useState(false);
-
-  const {
-    appliedFilters,
-    pendingFilters,
-    changedFilters,
-    setPending,
-    applyAll,
-    discardAll,
-    clearAndApply,
-    removeAppliedAndApply,
-    hasChanges,
-    changeCount,
-    getFilterValue,
-  } = useFilterBatch({
-    defaultParams: { "filter[muted]": "false" },
+  const isAlertsEdit = variant === "alerts-edit";
+  const checkTitles = Object.fromEntries(
+    checkOptions.map(({ checkId, checkTitle }) => [
+      checkId,
+      checkTitle || checkId,
+    ]),
+  );
+  const findingGroupFilterOption = buildFindingGroupFilterOption({
+    checkOptions,
+    selectedCheckIds: getFilterValue("filter[check_id]"),
+    selectedCheckIdsIn: getFilterValue("filter[check_id__in]"),
+    checkTitles,
   });
 
-  // Custom filters for the expandable section (removed Provider - now using AccountsSelector)
   const customFilters = [
-    ...filterFindings.map((filter) => ({
-      ...filter,
-      labelFormatter: (value: string) =>
-        getFindingsFilterDisplayValue(`filter[${filter.key}]`, value, {
-          providers,
-          scans: scanDetails,
-        }),
-    })),
+    ...filterFindings
+      .filter((filter) => !isAlertsEdit || filter.key !== FILTER_FIELD.STATUS)
+      .map((filter) => ({
+        ...filter,
+        labelFormatter: (value: string) =>
+          getFindingsFilterDisplayValue(`filter[${filter.key}]`, value, {
+            providers,
+            scans: scanDetails,
+            checkTitles,
+          }),
+      })),
+    ...(findingGroupFilterOption ? [findingGroupFilterOption] : []),
     {
-      key: FilterType.REGION,
+      key: FILTER_FIELD.REGION,
       labelCheckboxGroup: "Regions",
       values: uniqueRegions,
-      index: 3,
-    },
-    {
-      key: FilterType.SERVICE,
-      labelCheckboxGroup: "Services",
-      values: uniqueServices,
       index: 4,
     },
     {
-      key: FilterType.RESOURCE_TYPE,
-      labelCheckboxGroup: "Resource Type",
-      values: uniqueResourceTypes,
-      index: 8,
-    },
-    {
-      key: FilterType.CATEGORY,
-      labelCheckboxGroup: "Category",
-      values: uniqueCategories,
-      labelFormatter: getCategoryLabel,
+      key: FILTER_FIELD.SERVICE,
+      labelCheckboxGroup: "Services",
+      values: uniqueServices,
       index: 5,
     },
     {
-      key: FilterType.RESOURCE_GROUPS,
-      labelCheckboxGroup: "Resource Group",
-      values: uniqueGroups,
-      labelFormatter: getGroupLabel,
+      key: FILTER_FIELD.RESOURCE_TYPE,
+      labelCheckboxGroup: "Resource Type",
+      values: uniqueResourceTypes,
+      index: 9,
+    },
+    {
+      key: FILTER_FIELD.CATEGORY,
+      labelCheckboxGroup: "Category",
+      values: uniqueCategories,
+      labelFormatter: getCategoryLabel,
       index: 6,
     },
     {
-      key: FilterType.SCAN,
-      labelCheckboxGroup: "Scan ID",
-      values: completedScanIds,
-      width: "wide" as const,
-      valueLabelMapping: scanDetails,
-      labelFormatter: (value: string) =>
-        getFindingsFilterDisplayValue(`filter[${FilterType.SCAN}]`, value, {
-          providers,
-          scans: scanDetails,
-        }),
+      key: FILTER_FIELD.RESOURCE_GROUPS,
+      labelCheckboxGroup: "Resource Group",
+      values: uniqueGroups,
+      labelFormatter: getGroupLabel,
       index: 7,
     },
+    ...(isAlertsEdit
+      ? []
+      : [
+          {
+            key: FILTER_FIELD.SCAN,
+            labelCheckboxGroup: "Scan ID",
+            values: completedScanIds,
+            width: "wide" as const,
+            valueLabelMapping: scanDetails,
+            labelFormatter: (value: string) =>
+              getFindingsFilterDisplayValue(
+                `filter[${FILTER_FIELD.SCAN}]`,
+                value,
+                {
+                  providers,
+                  scans: scanDetails,
+                },
+              ),
+            index: 8,
+          },
+        ]),
   ];
 
   const hasCustomFilters = customFilters.length > 0;
@@ -138,22 +194,24 @@ export const FindingsFilters = ({
     appliedFilters,
     {
       providers,
+      providerGroups,
       scans: scanDetails,
+      checkTitles,
     },
   );
   const pendingFilterChips: FilterChip[] = buildFindingsFilterChips(
     changedFilters,
     {
       providers,
+      providerGroups,
       scans: scanDetails,
+      checkTitles,
     },
   );
   const appliedCount = countVisibleFilterKeys(appliedFilters);
   const showAppliedRow = appliedFilterChips.length > 0;
   const showPendingRow = hasChanges;
 
-  // Handler for removing a single chip: update the pending filter to remove that value.
-  // setPending handles both "filter[key]" and "key" formats internally.
   const handleChipRemove = (filterKey: string, value?: string) => {
     if (value === undefined) {
       setPending(filterKey, []);
@@ -165,42 +223,79 @@ export const FindingsFilters = ({
     setPending(filterKey, nextValues);
   };
 
-  // For the date picker, read from pendingFilters
   const pendingDateValues = pendingFilters["filter[inserted_at]"];
   const pendingDateValue =
     pendingDateValues && pendingDateValues.length > 0
       ? pendingDateValues[0]
       : undefined;
 
-  const expandedFilters = hasCustomFilters ? (
-    <ExpandableSection isExpanded={isExpanded} contentClassName="pt-0">
-      <DataTableFilterCustom
-        gridClassName="gap-3"
-        filters={customFilters}
-        prependElement={
-          <CustomDatePicker
-            onBatchChange={(filterKey, value) =>
-              setPending(filterKey, value ? [value] : [])
-            }
-            value={pendingDateValue}
-          />
-        }
-        hideClearButton
-        mode={DATA_TABLE_FILTER_MODE.BATCH}
+  const providerAccountControls = (className: string) => (
+    <>
+      <ProviderAccountSelectors
+        providers={providers}
+        mode="batch"
+        selectedProviderTypes={getFilterValue("filter[provider_type__in]")}
+        selectedAccounts={getFilterValue("filter[provider_id__in]")}
         onBatchChange={setPending}
-        getFilterValue={getFilterValue}
+        providerSelectorClassName={className}
+        accountSelectorClassName={className}
       />
-    </ExpandableSection>
+      {providerGroups !== undefined && (
+        <div className={className}>
+          <ProviderGroupSelector
+            groups={providerGroups}
+            selectedValues={getFilterValue("filter[provider_groups__in]")}
+            onBatchChange={setPending}
+          />
+        </div>
+      )}
+    </>
+  );
+
+  const alertEditFilterGrid = hasCustomFilters ? (
+    <DataTableFilterCustom
+      gridClassName="w-full gap-3 xl:grid-cols-3 2xl:grid-cols-3"
+      filters={customFilters}
+      prependElement={providerAccountControls(FILTER_GRID_ITEM_CLASS)}
+      hideClearButton
+      mode={DATA_TABLE_FILTER_MODE.BATCH}
+      onBatchChange={setPending}
+      getFilterValue={getFilterValue}
+    />
   ) : null;
+
+  const expandedFilters =
+    hasCustomFilters && !isAlertsEdit ? (
+      <ExpandableSection isExpanded={isExpanded} contentClassName="pt-0">
+        <DataTableFilterCustom
+          gridClassName="gap-3"
+          filters={customFilters}
+          prependElement={
+            isAlertsEdit ? undefined : (
+              <CustomDatePicker
+                onBatchChange={(filterKey, value) =>
+                  setPending(filterKey, value ? [value] : [])
+                }
+                value={pendingDateValue}
+              />
+            )
+          }
+          hideClearButton
+          mode={DATA_TABLE_FILTER_MODE.BATCH}
+          onBatchChange={setPending}
+          getFilterValue={getFilterValue}
+        />
+      </ExpandableSection>
+    ) : null;
 
   const appliedSummary = (
     <FilterSummaryStrip
       chips={appliedFilterChips}
-      onRemove={removeAppliedAndApply}
+      onRemove={removeAppliedAndApply ?? (() => undefined)}
       trailingContent={
         <ClearFiltersButton
           showCount
-          onClear={clearAndApply}
+          onClear={clearAndApply ?? (() => undefined)}
           pendingCount={appliedCount}
         />
       }
@@ -215,8 +310,8 @@ export const FindingsFilters = ({
         <ApplyFiltersButton
           hasChanges={hasChanges}
           changeCount={changeCount}
-          onApply={applyAll}
-          onDiscard={discardAll}
+          onApply={applyAll ?? (() => undefined)}
+          onDiscard={discardAll ?? (() => undefined)}
         />
       }
     />
@@ -225,45 +320,73 @@ export const FindingsFilters = ({
   return (
     <BatchFiltersLayout
       testIdPrefix="findings"
+      controlsClassName="gap-3"
       controls={
-        <>
-          <div className="min-w-[200px] flex-1 md:max-w-[280px]">
-            <ProviderTypeSelector
-              providers={providers}
-              onBatchChange={setPending}
-              selectedValues={getFilterValue("filter[provider_type__in]")}
-            />
-          </div>
-          <div className="min-w-[200px] flex-1 md:max-w-[280px]">
-            <AccountsSelector
-              providers={providers}
-              onBatchChange={setPending}
-              selectedValues={getFilterValue("filter[provider_id__in]")}
-              selectedProviderTypes={getFilterValue(
-                "filter[provider_type__in]",
-              )}
-            />
-          </div>
-          {hasCustomFilters && (
-            <Button
-              variant="outline"
-              size="lg"
-              onClick={() => setIsExpanded(!isExpanded)}
-            >
-              {isExpanded ? "Less Filters" : "More Filters"}
-              <ChevronDown
-                className={`size-4 transition-transform duration-300 ${isExpanded ? "rotate-180" : "rotate-0"}`}
-              />
-            </Button>
-          )}
-        </>
+        isAlertsEdit ? (
+          alertEditFilterGrid
+        ) : (
+          <>
+            {providerAccountControls(FILTER_CONTROL_COLUMN_CLASS)}
+            {hasCustomFilters && (
+              <Button
+                variant="outline"
+                size="lg"
+                onClick={() => setIsExpanded(!isExpanded)}
+              >
+                {isExpanded ? "Less Filters" : "More Filters"}
+                <ChevronDown
+                  className={`size-4 transition-transform duration-300 ${isExpanded ? "rotate-180" : "rotate-0"}`}
+                />
+              </Button>
+            )}
+            {trailingControls}
+          </>
+        )
       }
       expandedFilters={expandedFilters}
       expandedFiltersVisible={isExpanded}
-      appliedSummary={appliedSummary}
-      pendingSummary={pendingSummary}
-      showAppliedRow={showAppliedRow}
-      showPendingRow={showPendingRow}
+      appliedSummary={showSummaries ? appliedSummary : null}
+      pendingSummary={showSummaries ? pendingSummary : null}
+      showAppliedRow={showSummaries && showAppliedRow}
+      showPendingRow={showSummaries && showPendingRow}
     />
+  );
+};
+
+export const FindingsFilters = (props: FindingsFiltersProps) => {
+  const {
+    appliedFilters,
+    pendingFilters,
+    changedFilters,
+    setPending,
+    applyAll,
+    discardAll,
+    clearAndApply,
+    removeAppliedAndApply,
+    hasChanges,
+    changeCount,
+    getFilterValue,
+  } = useFilterBatch({
+    defaultParams: { "filter[muted]": "false" },
+    exclusiveFilterGroups: [FINDING_GROUP_FILTER_KEYS],
+  });
+
+  return (
+    <div data-tour-id="explore-findings-filters">
+      <FindingsFilterBatchControls
+        {...props}
+        appliedFilters={appliedFilters}
+        pendingFilters={pendingFilters}
+        changedFilters={changedFilters}
+        setPending={setPending}
+        applyAll={applyAll}
+        discardAll={discardAll}
+        clearAndApply={clearAndApply}
+        removeAppliedAndApply={removeAppliedAndApply}
+        hasChanges={hasChanges}
+        changeCount={changeCount}
+        getFilterValue={getFilterValue}
+      />
+    </div>
   );
 };

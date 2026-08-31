@@ -7,8 +7,8 @@ import {
   ActionDropdown,
   ActionDropdownItem,
 } from "@/components/shadcn/dropdown";
-import { EntityInfo } from "@/components/ui/entities";
-import { DataTableColumnHeader } from "@/components/ui/table";
+import { EntityInfo } from "@/components/shadcn/entities";
+import { DataTableColumnHeader } from "@/components/shadcn/table";
 import { getGroupLabel } from "@/lib/categories";
 import { getRegionFlag } from "@/lib/region-flags";
 import { ProviderType, ResourceProps } from "@/types";
@@ -92,7 +92,7 @@ export function getColumnResources({
     {
       accessorKey: "provider",
       header: ({ column }) => (
-        <DataTableColumnHeader column={column} title="Cloud Provider" />
+        <DataTableColumnHeader column={column} title="Provider" />
       ),
       cell: ({ row }) => {
         const provider = getProviderData(row, "provider");

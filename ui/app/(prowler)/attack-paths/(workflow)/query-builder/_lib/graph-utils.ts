@@ -4,21 +4,42 @@
 
 import type { AttackPathGraphData } from "@/types/attack-paths";
 
-/**
- * Type for edge node reference - can be a string ID or an object with id property
- * Note: We use `object` to match GraphEdge type from attack-paths.ts
- */
-export type EdgeNodeRef = string | object;
+import { isProwlerFindingNode } from "./node-types";
 
-/**
- * Helper to get edge source/target ID from string or object
- */
-export const getEdgeNodeId = (nodeRef: EdgeNodeRef): string => {
-  if (typeof nodeRef === "string") {
-    return nodeRef;
+export const resolveHiddenFindingIds = ({
+  expandedResources,
+  findingNodeIds,
+  findingToResources,
+  isFilteredView,
+}: {
+  expandedResources: ReadonlySet<string>;
+  findingNodeIds: ReadonlySet<string>;
+  findingToResources: ReadonlyMap<string, ReadonlySet<string>>;
+  isFilteredView: boolean;
+}): Set<string> => {
+  const hiddenFindingIds = new Set<string>();
+
+  if (isFilteredView) {
+    return hiddenFindingIds;
   }
-  // Edge node references are objects with an id property
-  return (nodeRef as { id: string }).id;
+
+  findingNodeIds.forEach((findingId) => {
+    const connectedResources = findingToResources.get(findingId);
+
+    if (!connectedResources) {
+      return;
+    }
+
+    const anyExpanded = Array.from(connectedResources).some((resourceId) =>
+      expandedResources.has(resourceId),
+    );
+
+    if (!anyExpanded) {
+      hiddenFindingIds.add(findingId);
+    }
+  });
+
+  return hiddenFindingIds;
 };
 
 /**
@@ -44,10 +65,8 @@ export const computeFilteredSubgraph = (
   });
 
   edges.forEach((edge) => {
-    const sourceId = getEdgeNodeId(edge.source);
-    const targetId = getEdgeNodeId(edge.target);
-    forwardEdges.get(sourceId)?.add(targetId);
-    backwardEdges.get(targetId)?.add(sourceId);
+    forwardEdges.get(edge.source)?.add(edge.target);
+    backwardEdges.get(edge.target)?.add(edge.source);
   });
 
   const visibleNodeIds = new Set<string>();
@@ -84,35 +103,30 @@ export const computeFilteredSubgraph = (
   traverseDownstream(targetNodeId);
 
   // Also include findings directly connected to the selected node
+  const nodeLabelMap = new Map(nodes.map((n) => [n.id, n.labels]));
   edges.forEach((edge) => {
-    const sourceId = getEdgeNodeId(edge.source);
-    const targetId = getEdgeNodeId(edge.target);
-    const sourceNode = nodes.find((n) => n.id === sourceId);
-    const targetNode = nodes.find((n) => n.id === targetId);
-
-    const sourceIsFinding = sourceNode?.labels.some((l) =>
-      l.toLowerCase().includes("finding"),
+    const sourceIsFinding = isProwlerFindingNode(
+      nodeLabelMap.get(edge.source) ?? [],
     );
-    const targetIsFinding = targetNode?.labels.some((l) =>
-      l.toLowerCase().includes("finding"),
+    const targetIsFinding = isProwlerFindingNode(
+      nodeLabelMap.get(edge.target) ?? [],
     );
 
     // Include findings connected to the selected node
-    if (sourceId === targetNodeId && targetIsFinding) {
-      visibleNodeIds.add(targetId);
+    if (edge.source === targetNodeId && targetIsFinding) {
+      visibleNodeIds.add(edge.target);
     }
-    if (targetId === targetNodeId && sourceIsFinding) {
-      visibleNodeIds.add(sourceId);
+    if (edge.target === targetNodeId && sourceIsFinding) {
+      visibleNodeIds.add(edge.source);
     }
   });
 
   // Filter nodes and edges to only include visible ones
   const filteredNodes = nodes.filter((node) => visibleNodeIds.has(node.id));
-  const filteredEdges = edges.filter((edge) => {
-    const sourceId = getEdgeNodeId(edge.source);
-    const targetId = getEdgeNodeId(edge.target);
-    return visibleNodeIds.has(sourceId) && visibleNodeIds.has(targetId);
-  });
+  const filteredEdges = edges.filter(
+    (edge) =>
+      visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target),
+  );
 
   return {
     nodes: filteredNodes,

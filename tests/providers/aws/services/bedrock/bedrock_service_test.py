@@ -2,6 +2,7 @@ from unittest import mock
 from unittest.mock import MagicMock
 
 import botocore
+import pytest
 from boto3 import client
 from moto import mock_aws
 
@@ -283,11 +284,20 @@ class TestBedrockPagination:
 class TestBedrockAgentPagination:
     """Test suite for Bedrock Agent pagination logic."""
 
-    def test_list_agents_pagination(self):
-        """Test that list_agents iterates through all pages."""
-        # Mock the audit_info
+    @pytest.mark.parametrize("partition", ["aws", "aws-us-gov", "aws-cn"])
+    def test_list_agents_pagination(self, partition):
+        """Test that list_agents iterates through all pages, in every partition.
+
+        The ARN is built from the audited partition, so GovCloud and China must
+        produce aws-us-gov/aws-cn ARNs. A hardcoded `arn:aws:` here yielded an ARN
+        that does not exist in those partitions, and exact --resource-arn matching
+        against it could never succeed.
+        """
+        # Mock the audit_info. AWSService reads the partition off provider.identity,
+        # so setting audited_partition alone leaves a MagicMock in the ARN.
         audit_info = MagicMock()
-        audit_info.audited_partition = "aws"
+        audit_info.identity.partition = partition
+        audit_info.audited_partition = partition
         audit_info.audited_account = "123456789012"
         audit_info.audit_resources = None
 
@@ -322,6 +332,7 @@ class TestBedrockAgentPagination:
         bedrock_agent_service = BedrockAgent(audit_info)
         bedrock_agent_service.regional_clients = {"us-east-1": regional_client}
         bedrock_agent_service.agents = {}  # Clear init side effects
+        bedrock_agent_service.all_agents = {}
         bedrock_agent_service.audited_account = "123456789012"
 
         # Run method
@@ -329,15 +340,154 @@ class TestBedrockAgentPagination:
 
         # Assertions
         assert len(bedrock_agent_service.agents) == 2
-        assert (
-            "arn:aws:bedrock:us-east-1:123456789012:agent/agent-1"
-            in bedrock_agent_service.agents
-        )
-        assert (
-            "arn:aws:bedrock:us-east-1:123456789012:agent/agent-2"
-            in bedrock_agent_service.agents
-        )
+        for agent_id in ("agent-1", "agent-2"):
+            expected_arn = (
+                f"arn:{partition}:bedrock:us-east-1:123456789012:agent/{agent_id}"
+            )
+            assert expected_arn in bedrock_agent_service.agents
+            # With no --resource-arn, the complete inventory and the reported set
+            # hold the very same objects.
+            assert bedrock_agent_service.all_agents[expected_arn] is (
+                bedrock_agent_service.agents[expected_arn]
+            )
 
         # Verify paginator was used
         regional_client.get_paginator.assert_called_once_with("list_agents")
         paginator.paginate.assert_called_once()
+
+
+class TestBedrockPromptPagination:
+    """Test suite for Bedrock Prompt pagination logic."""
+
+    def test_list_prompts_pagination(self):
+        """Test that list_prompts iterates through all pages."""
+        # Mock the audit_info
+        audit_info = MagicMock()
+        audit_info.audited_partition = "aws"
+        audit_info.audited_account = "123456789012"
+        audit_info.audit_resources = None
+
+        # Mock the regional client
+        regional_client = MagicMock()
+        regional_client.region = "us-east-1"
+
+        # Mock paginator
+        paginator = MagicMock()
+        page1 = {
+            "promptSummaries": [
+                {
+                    "id": "prompt-1",
+                    "name": "prompt-name-1",
+                    "arn": "arn:aws:bedrock:us-east-1:123456789012:prompt/prompt-1",
+                }
+            ]
+        }
+        page2 = {
+            "promptSummaries": [
+                {
+                    "id": "prompt-2",
+                    "name": "prompt-name-2",
+                    "arn": "arn:aws:bedrock:us-east-1:123456789012:prompt/prompt-2",
+                }
+            ]
+        }
+        paginator.paginate.return_value = [page1, page2]
+        regional_client.get_paginator.return_value = paginator
+
+        # Initialize service and inject mock client
+        bedrock_agent_service = BedrockAgent(audit_info)
+        bedrock_agent_service.regional_clients = {"us-east-1": regional_client}
+        bedrock_agent_service.prompts = {}  # Clear init side effects
+        bedrock_agent_service.prompt_scanned_regions = set()
+
+        # Run method
+        bedrock_agent_service._list_prompts(regional_client)
+
+        # Assertions
+        assert len(bedrock_agent_service.prompts) == 2
+        assert (
+            "arn:aws:bedrock:us-east-1:123456789012:prompt/prompt-1"
+            in bedrock_agent_service.prompts
+        )
+        assert (
+            "arn:aws:bedrock:us-east-1:123456789012:prompt/prompt-2"
+            in bedrock_agent_service.prompts
+        )
+        assert "us-east-1" in bedrock_agent_service.prompt_scanned_regions
+
+        # Verify paginator was used
+        regional_client.get_paginator.assert_called_once_with("list_prompts")
+        paginator.paginate.assert_called_once()
+
+    def test_list_prompts_filters_audit_resources(self):
+        """Prompt collection must honor audit_resources when resource ARNs are scoped."""
+        audit_info = MagicMock()
+        audit_info.audited_partition = "aws"
+        audit_info.audited_account = "123456789012"
+        audit_info.audit_resources = [
+            "arn:aws:bedrock:us-east-1:123456789012:prompt/prompt-1"
+        ]
+
+        regional_client = MagicMock()
+        regional_client.region = "us-east-1"
+
+        paginator = MagicMock()
+        paginator.paginate.return_value = [
+            {
+                "promptSummaries": [
+                    {
+                        "id": "prompt-1",
+                        "name": "prompt-name-1",
+                        "arn": "arn:aws:bedrock:us-east-1:123456789012:prompt/prompt-1",
+                    },
+                    {
+                        "id": "prompt-2",
+                        "name": "prompt-name-2",
+                        "arn": "arn:aws:bedrock:us-east-1:123456789012:prompt/prompt-2",
+                    },
+                ]
+            }
+        ]
+        regional_client.get_paginator.return_value = paginator
+
+        bedrock_agent_service = BedrockAgent(audit_info)
+        bedrock_agent_service.regional_clients = {"us-east-1": regional_client}
+        bedrock_agent_service.prompts = {}
+        bedrock_agent_service.prompt_scanned_regions = set()
+
+        bedrock_agent_service._list_prompts(regional_client)
+
+        assert len(bedrock_agent_service.prompts) == 1
+        assert (
+            "arn:aws:bedrock:us-east-1:123456789012:prompt/prompt-1"
+            in bedrock_agent_service.prompts
+        )
+        assert (
+            "arn:aws:bedrock:us-east-1:123456789012:prompt/prompt-2"
+            not in bedrock_agent_service.prompts
+        )
+        assert "us-east-1" in bedrock_agent_service.prompt_scanned_regions
+
+    def test_list_prompts_error_does_not_mark_region_scanned(self):
+        """If ListPrompts raises, the region must not be added to prompt_scanned_regions."""
+        audit_info = MagicMock()
+        audit_info.audited_partition = "aws"
+        audit_info.audited_account = "123456789012"
+        audit_info.audit_resources = None
+
+        regional_client = MagicMock()
+        regional_client.region = "us-east-1"
+
+        paginator = MagicMock()
+        paginator.paginate.side_effect = Exception("ListPrompts failed")
+        regional_client.get_paginator.return_value = paginator
+
+        bedrock_agent_service = BedrockAgent(audit_info)
+        bedrock_agent_service.regional_clients = {"us-east-1": regional_client}
+        bedrock_agent_service.prompts = {}
+        bedrock_agent_service.prompt_scanned_regions = set()
+
+        bedrock_agent_service._list_prompts(regional_client)
+
+        assert bedrock_agent_service.prompts == {}
+        assert bedrock_agent_service.prompt_scanned_regions == set()

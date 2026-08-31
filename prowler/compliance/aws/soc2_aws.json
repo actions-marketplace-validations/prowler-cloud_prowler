@@ -43,6 +43,14 @@
         "cloudtrail_s3_dataevents_write_enabled",
         "cloudtrail_multi_region_enabled",
         "config_recorder_all_regions_enabled"
+      ],
+      "ConfigRequirements": [
+        {
+          "Check": "config_recorder_all_regions_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        }
       ]
     },
     {
@@ -61,6 +69,26 @@
         "guardduty_is_enabled",
         "securityhub_enabled",
         "config_recorder_all_regions_enabled"
+      ],
+      "ConfigRequirements": [
+        {
+          "Check": "guardduty_is_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        },
+        {
+          "Check": "securityhub_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        },
+        {
+          "Check": "config_recorder_all_regions_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        }
       ]
     },
     {
@@ -80,6 +108,14 @@
         "ssm_managed_compliant_patching",
         "guardduty_no_high_severity_findings",
         "guardduty_is_enabled"
+      ],
+      "ConfigRequirements": [
+        {
+          "Check": "guardduty_is_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        }
       ]
     },
     {
@@ -116,6 +152,14 @@
       ],
       "Checks": [
         "config_recorder_all_regions_enabled"
+      ],
+      "ConfigRequirements": [
+        {
+          "Check": "config_recorder_all_regions_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        }
       ]
     },
     {
@@ -133,6 +177,14 @@
       "Checks": [
         "guardduty_is_enabled",
         "guardduty_no_high_severity_findings"
+      ],
+      "ConfigRequirements": [
+        {
+          "Check": "guardduty_is_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        }
       ]
     },
     {
@@ -173,7 +225,8 @@
         }
       ],
       "Checks": [
-        "s3_bucket_public_access"
+        "s3_bucket_public_access",
+        "kms_key_enclave_attestation_not_enforced"
       ]
     },
     {
@@ -210,7 +263,9 @@
         "bedrock_full_access_policy_attached",
         "iam_aws_attached_policy_no_administrative_privileges",
         "iam_customer_attached_policy_no_administrative_privileges",
-        "iam_inline_policy_no_administrative_privileges"
+        "iam_inline_policy_no_administrative_privileges",
+        "kms_key_enclave_attestation_bypassable_path",
+        "kms_key_enclave_attestation_no_deployment_binding"
       ]
     },
     {
@@ -270,7 +325,10 @@
         "ec2_securitygroup_allow_ingress_from_internet_to_tcp_port_postgres_5432",
         "ec2_securitygroup_allow_ingress_from_internet_to_tcp_port_redis_6379",
         "ec2_securitygroup_allow_ingress_from_internet_to_tcp_port_sql_server_1433_1434",
-        "ec2_securitygroup_allow_ingress_from_internet_to_tcp_port_telnet_23"
+        "ec2_securitygroup_allow_ingress_from_internet_to_tcp_port_telnet_23",
+        "ec2_confidential_workload_host_public_ip",
+        "ec2_confidential_workload_host_unrestricted_ingress",
+        "ec2_confidential_workload_host_vsock_proxy_exposed"
       ]
     },
     {
@@ -312,6 +370,20 @@
       "Checks": [
         "guardduty_is_enabled",
         "securityhub_enabled"
+      ],
+      "ConfigRequirements": [
+        {
+          "Check": "guardduty_is_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        },
+        {
+          "Check": "securityhub_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        }
       ]
     },
     {
@@ -330,7 +402,22 @@
         "guardduty_is_enabled",
         "securityhub_enabled",
         "ec2_instance_managed_by_ssm",
-        "ssm_managed_compliant_patching"
+        "ssm_managed_compliant_patching",
+        "kms_key_enclave_attestation_pcr_mismatch"
+      ],
+      "ConfigRequirements": [
+        {
+          "Check": "guardduty_is_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        },
+        {
+          "Check": "securityhub_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        }
       ]
     },
     {
@@ -346,6 +433,7 @@
         }
       ],
       "Checks": [
+        "cloudtrail_bedrock_logging_enabled",
         "cloudtrail_cloudwatch_logging_enabled",
         "cloudwatch_changes_to_network_acls_alarm_configured",
         "cloudwatch_changes_to_network_gateways_alarm_configured",
@@ -365,7 +453,24 @@
         "ec2_instance_imdsv2_enabled",
         "guardduty_is_enabled",
         "apigateway_restapi_logging_enabled",
-        "ec2_securitygroup_allow_ingress_from_internet_to_tcp_port_22"
+        "ec2_securitygroup_allow_ingress_from_internet_to_tcp_port_22",
+        "ec2_confidential_workload_host_imdsv2_not_enforced",
+        "kms_key_enclave_debug_attestation_detected",
+        "kms_key_enclave_attestation_unknown_image"
+      ],
+      "ConfigRequirements": [
+        {
+          "Check": "securityhub_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        },
+        {
+          "Check": "guardduty_is_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        }
       ]
     },
     {
@@ -398,6 +503,20 @@
         "cloudwatch_log_group_retention_policy_specific_days_enabled",
         "vpc_flow_logs_enabled",
         "guardduty_no_high_severity_findings"
+      ],
+      "ConfigRequirements": [
+        {
+          "Check": "guardduty_is_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        },
+        {
+          "Check": "securityhub_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        }
       ]
     },
     {
@@ -425,6 +544,20 @@
         "redshift_cluster_automated_snapshot",
         "s3_bucket_object_versioning",
         "securityhub_enabled"
+      ],
+      "ConfigRequirements": [
+        {
+          "Check": "guardduty_is_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        },
+        {
+          "Check": "securityhub_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        }
       ]
     },
     {
@@ -462,6 +595,14 @@
       ],
       "Checks": [
         "config_recorder_all_regions_enabled"
+      ],
+      "ConfigRequirements": [
+        {
+          "Check": "config_recorder_all_regions_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        }
       ]
     },
     {
@@ -514,7 +655,8 @@
         "stepfunctions_statemachine_logging_enabled",
         "waf_global_webacl_logging_enabled",
         "wafv2_webacl_logging_enabled",
-        "wafv2_webacl_rule_logging_enabled"
+        "wafv2_webacl_rule_logging_enabled",
+        "ec2_confidential_workload_host_not_running"
       ]
     },
     {
@@ -599,6 +741,14 @@
         "rds_cluster_integration_cloudwatch_logs",
         "glue_etl_jobs_logging_enabled",
         "stepfunctions_statemachine_logging_enabled"
+      ],
+      "ConfigRequirements": [
+        {
+          "Check": "config_recorder_all_regions_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        }
       ]
     },
     {

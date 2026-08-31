@@ -2,6 +2,458 @@
 
 All notable changes to the **Prowler UI** are documented in this file.
 
+<!-- changelog: release notes start -->
+
+## [1.40.0] (Prowler v5.40.0)
+
+### 🚀 Added
+
+- NCSC Cyber Essentials 3.3 compliance support with its dedicated mapper, details panel, and icon [(#11588)](https://github.com/prowler-cloud/prowler/pull/11588)
+- Thumbs-up and thumbs-down feedback form for Lighthouse assistant answers with optional details [(#12419)](https://github.com/prowler-cloud/prowler/pull/12419)
+- Display the default one-scan free trial and trial expiration in the existing sidebar banner [(#12420)](https://github.com/prowler-cloud/prowler/pull/12420)
+- Slack integration: connect a Slack workspace from the Integrations page (Prowler Cloud only) [(#12435)](https://github.com/prowler-cloud/prowler/pull/12435)
+- Prowler Cloud indicator for providers created via Import Findings alongside every connection status [(#12447)](https://github.com/prowler-cloud/prowler/pull/12447)
+- Slack integration: authorize several destination channels at once — the connection check confirms each authorized channel with a one-time message and names the one Slack refuses [(#12491)](https://github.com/prowler-cloud/prowler/pull/12491)
+- Slack channels confirmed on the Slack integration as alert rule destinations, selectable in the alert modal alongside email recipients [(#12492)](https://github.com/prowler-cloud/prowler/pull/12492)
+- Cancelled-subscription variant in the sidebar trial banner (Prowler Cloud only) [(#12538)](https://github.com/prowler-cloud/prowler/pull/12538)
+
+### 🔄 Changed
+
+- Alerts list Recipients column becomes Destinations, summarizing a rule's email recipients and Slack channels at a glance [(#12493)](https://github.com/prowler-cloud/prowler/pull/12493)
+
+### 🐞 Fixed
+
+- Scan auto-refresh no longer overlaps slow client refreshes and now signals when scan execution settles [(#12455)](https://github.com/prowler-cloud/prowler/pull/12455)
+- The compliance "Across providers" section builds its framework list from the API catalog instead of a hardcoded set of ids, so a universal framework registered by an installed package renders like a shipped one [(#12536)](https://github.com/prowler-cloud/prowler/pull/12536)
+- The compliance "Across providers" section reports a failed catalog request instead of rendering the "no data yet" empty state [(#12536)](https://github.com/prowler-cloud/prowler/pull/12536)
+- Returning from Slack after approving the install now reliably lands on the Slack integration page instead of getting stuck on the callback screen (Prowler Cloud only) [(#12572)](https://github.com/prowler-cloud/prowler/pull/12572)
+
+### 🔐 Security
+
+- `libcrypto3` and `libssl3` upgraded to 3.5.8-r0 in the UI container image, patching seven high OpenSSL CVEs [(#12549)](https://github.com/prowler-cloud/prowler/pull/12549)
+
+---
+
+## [1.39.0] (Prowler v5.39.0)
+
+### 🚀 Added
+
+- Manual verification workflow for `MANUAL` findings with evidence, effective `PASS` status, and expiration details [(#12253)](https://github.com/prowler-cloud/prowler/pull/12253)
+- Surface pre-configured credential creation links in the add-provider wizard. Cloudflare exposes the User API Token template and an Account-Owned template pinned to the Cloudflare Account ID entered in the wizard, GitHub exposes the personal-repositories template and an organization-scanning template pinned to the identifier entered in the wizard [(#12349)](https://github.com/prowler-cloud/prowler/pull/12349)
+- Attack Paths graph groups resources by class into expandable nodes and marks the query outcome as the terminal node, with the clicked resource highlighted while its findings are expanded (Prowler Cloud only) [(#12381)](https://github.com/prowler-cloud/prowler/pull/12381)
+- Azure Management Group onboarding: add every subscription in a tenant at once (Prowler Cloud only) [(#12386)](https://github.com/prowler-cloud/prowler/pull/12386)
+- Manage Lighthouse AI role permission in the role forms and role details, so permission to change the Lighthouse AI configuration can be granted or restricted independently of other permissions (Prowler Cloud only) [(#12412)](https://github.com/prowler-cloud/prowler/pull/12412)
+- CMMC 2.0 universal compliance framework rendering: dedicated icon, Domain/Level requirement mapper and cross-provider catalog tile [(#12414)](https://github.com/prowler-cloud/prowler/pull/12414)
+
+### 🐞 Fixed
+
+- Organization discovery describes a too-deep hierarchy in each provider's own vocabulary: AWS organizational units, Azure Management Groups, Google Cloud folders [(#12386)](https://github.com/prowler-cloud/prowler/pull/12386)
+- `View Findings` on the Scans page no longer opens an empty list for users outside the UTC timezone [(#12411)](https://github.com/prowler-cloud/prowler/pull/12411)
+
+---
+
+## [1.38.0] (Prowler v5.38.0)
+
+### 🚀 Added
+
+- Sign-in method indicators in the Prowler Cloud Users table, including linked SAML domains [(#12268)](https://github.com/prowler-cloud/prowler/pull/12268)
+- Compliance watchlist: pin frameworks from any compliance view and filter every view down to the pinned ones, including the overview card and a finding's compliance chips (Prowler Cloud only) [(#12300)](https://github.com/prowler-cloud/prowler/pull/12300)
+- Multiple verified email domains in a single SAML configuration for Prowler Cloud [(#12332)](https://github.com/prowler-cloud/prowler/pull/12332)
+- Container images now ship an SBOM and build provenance as OCI attestations [(#12352)](https://github.com/prowler-cloud/prowler/pull/12352)
+
+### 🔄 Changed
+
+- `Add Provider` wizard documentation link targeting each provider's credentials section and selected authentication method [(#12218)](https://github.com/prowler-cloud/prowler/pull/12218)
+
+### 🐞 Fixed
+
+- Imported scans now appear on the Scans page even when no provider is connected [(#12025)](https://github.com/prowler-cloud/prowler/pull/12025)
+- Feedback widget no longer obscures page and side-panel actions [(#12282)](https://github.com/prowler-cloud/prowler/pull/12282)
+- Rows-per-page selector no longer disappears when the chosen page size collapses a table to a single page [(#12299)](https://github.com/prowler-cloud/prowler/pull/12299)
+- Overview ThreatScore card no longer leaves unused horizontal space at responsive layout boundaries [(#12317)](https://github.com/prowler-cloud/prowler/pull/12317)
+- Overview metric cards stack below the desktop layout threshold and preserve readable widths when aligned [(#12323)](https://github.com/prowler-cloud/prowler/pull/12323)
+- Overview metric cards now align horizontally at medium desktop widths [(#12323)](https://github.com/prowler-cloud/prowler/pull/12323)
+- AWS and GCP organization onboarding launches all linked provider scans through one bulk operation [(#12350)](https://github.com/prowler-cloud/prowler/pull/12350)
+- `/compliance` no longer fails while compliance overview data is still being generated [(#12358)](https://github.com/prowler-cloud/prowler/pull/12358)
+- `Client Secret` and `Refresh Token` labels in the GCP organization authentication form [(#12362)](https://github.com/prowler-cloud/prowler/pull/12362)
+
+### 🔐 Security
+
+- Removed the `apk upgrade` from the UI image and moved the base digest forward instead, so the image is reproducible from its pin rather than from whatever Alpine serves at build time [(#12313)](https://github.com/prowler-cloud/prowler/pull/12313)
+
+---
+
+## [1.37.1] (Prowler v5.37.1)
+
+### 🐞 Fixed
+
+- Fixed image optimization in the production container: Next.js standalone tracing omitted `sharp`'s native `libvips` library, so every image was served unoptimized [(#12307)](https://github.com/prowler-cloud/prowler/pull/12307)
+
+### 🔐 Security
+
+- The UI container image now patches musl and zlib alongside OpenSSL, and `sharp` is pinned to 0.35.3, clearing the image's remaining CVEs [(#12307)](https://github.com/prowler-cloud/prowler/pull/12307)
+
+---
+
+## [1.37.0] (Prowler v5.37.0)
+
+### 🚀 Added
+
+- Lighthouse AI contextual messages with page-aware prompts, focused side-panel details, selected-resource metadata, and retry-safe historical badges [(#12069)](https://github.com/prowler-cloud/prowler/pull/12069)
+- Cross-account compliance view in the Multiple Scans tab: an "Across providers" section listing single-provider frameworks aggregatable across every account of the same provider type, with a per-account detail, findings drill-down and combined PDF report (Prowler Cloud only) [(#12086)](https://github.com/prowler-cloud/prowler/pull/12086)
+- In Prowler Cloud, authenticated users can send product feedback through a persistent widget backed by a PostHog headless survey, rendered with native Prowler components and editable from the PostHog dashboard [(#12116)](https://github.com/prowler-cloud/prowler/pull/12116)
+- Attack Paths query info panel now links every query to its page on Prowler Hub [(#12145)](https://github.com/prowler-cloud/prowler/pull/12145)
+- Warning before replacing an organization credential or deleting an organization, listing the providers affected [(#12255)](https://github.com/prowler-cloud/prowler/pull/12255)
+- GCP organization onboarding in the provider wizard: add every project of an organization at once, choosing which discovered projects to include (Prowler Cloud only) [(#12255)](https://github.com/prowler-cloud/prowler/pull/12255)
+- Sign-up campaign attribution preserves `promo_code` and `utm_*` params across auth redirects, sign-in/sign-up links, Google/GitHub OAuth callbacks, and `POST /users` [(#12269)](https://github.com/prowler-cloud/prowler/pull/12269)
+
+### 🔄 Changed
+
+- `/compliance` now lands on the Multiple Scans tab; links carrying a `scanId` keep opening Single Scan [(#12086)](https://github.com/prowler-cloud/prowler/pull/12086)
+- Compliance tab naming: "Per Scan" is now "Single Scan" and "Cross-Provider" is now "Multiple Scans", with matching "Across provider types" and "Across providers" section headers explaining each aggregation axis [(#12086)](https://github.com/prowler-cloud/prowler/pull/12086)
+- Lighthouse contextual suggestions now show concise actions while preserving detailed prompts for chat [(#12219)](https://github.com/prowler-cloud/prowler/pull/12219)
+- Providers page groups GCP projects under their organization and folders [(#12255)](https://github.com/prowler-cloud/prowler/pull/12255)
+
+### 🐞 Fixed
+
+- Attack Paths now classify cloud-provider finding resources separately from Prowler findings [(#11244)](https://github.com/prowler-cloud/prowler/pull/11244)
+- Finding delta colors and integration update button labels restored [(#12160)](https://github.com/prowler-cloud/prowler/pull/12160)
+- Long unbroken messages in Lighthouse chat no longer overflow their message bubble [(#12215)](https://github.com/prowler-cloud/prowler/pull/12215)
+- SAML ACS URL field remains visible while generating the callback URL from the email domain [(#12236)](https://github.com/prowler-cloud/prowler/pull/12236)
+
+---
+
+## [1.36.0] (Prowler v5.36.0)
+
+### 🚀 Added
+
+- Finding Groups and grouped selections can be sent to Jira in Cloud with deep links, filter chip display, and Jira feedback toasts [(#12001)](https://github.com/prowler-cloud/prowler/pull/12001)
+- In Prowler Cloud, the Attack Paths query selector now lists only queries that returned data for the selected scan, hiding empty ones [(#12010)](https://github.com/prowler-cloud/prowler/pull/12010)
+- Overview banner linking to the AI agents documentation, shown next to the Lighthouse AI banner in Cloud and full width on self-hosted deployments [(#12074)](https://github.com/prowler-cloud/prowler/pull/12074)
+
+### 🐞 Fixed
+
+- Findings Severity Over Time chart Y-axis labels no longer overflow for large findings counts [(#11545)](https://github.com/prowler-cloud/prowler/pull/11545)
+- UI Sentry alerts now suppress non-actionable warnings and expected API/control-flow noise while preserving actionable runtime failures [(#11665)](https://github.com/prowler-cloud/prowler/pull/11665)
+- OCI provider E2E tests no longer require or submit a region when adding or updating credentials [(#11741)](https://github.com/prowler-cloud/prowler/pull/11741)
+- Billing navigation is hidden when Cloud billing is disabled, including Enterprise deployments [(#12047)](https://github.com/prowler-cloud/prowler/pull/12047)
+- AWS Organizations setup modal now shows the "Enter a valid Organizational Unit or Root ID" hint in the error color, clarifying why the deployment button is disabled [(#12063)](https://github.com/prowler-cloud/prowler/pull/12063)
+- Sidebar logo top spacing in the main app sidebar [(#12066)](https://github.com/prowler-cloud/prowler/pull/12066)
+- Contextual Cloud upgrade modal content remains stable throughout the closing animation [(#12067)](https://github.com/prowler-cloud/prowler/pull/12067)
+- Tenant switches now refresh session user permissions for the selected tenant [(#12087)](https://github.com/prowler-cloud/prowler/pull/12087)
+
+### 🔐 Security
+
+- Removed the unused `npm` CLI from the UI container image, eliminating the bundled `node-tar` `CVE-2026-59873` (and future bundled-npm CVEs); the image builds with `pnpm` via `corepack` and does not use `npm` [(#12065)](https://github.com/prowler-cloud/prowler/pull/12065)
+- Bumped `vitest` and `@vitest/browser`, `@vitest/browser-playwright`, `@vitest/coverage-v8` from `4.1.8` to `4.1.10`, resolving the critical `@vitest/browser` Browser Mode file-access permission bypass (`GHSA-p63j-vcc4-9vmv`) flagged by `pnpm audit`; dev dependencies only, no runtime impact [(#12077)](https://github.com/prowler-cloud/prowler/pull/12077)
+- Kubernetes credential forms now reject kubeconfig files using legacy `auth-provider.config.cmd-path` command authentication [(#12091)](https://github.com/prowler-cloud/prowler/pull/12091)
+- Next.js from 16.2.9 to 16.2.11, patching 4 high- and 5 medium-severity vulnerabilities [(#12093)](https://github.com/prowler-cloud/prowler/pull/12093)
+- next-auth from 5.0.0-beta.30 to 5.0.0-beta.32, patching 2 critical Auth.js advisories (GHSA-8fpg-xm3f-6cx3 fail-open auth checks, GHSA-7rqj-j65f-68wh email homoglyph bypass) [(#12108)](https://github.com/prowler-cloud/prowler/pull/12108)
+
+---
+
+## [1.35.0] (Prowler v5.35.0)
+
+### 🔄 Changed
+
+- AWS Organizations onboarding now deploys the management account role and the member-account StackSet from a single CloudFormation stack, replacing the manual StackSet console step [(#11927)](https://github.com/prowler-cloud/prowler/pull/11927)
+- Dynamic providers can now be renamed and deleted from the Providers table [(#11957)](https://github.com/prowler-cloud/prowler/pull/11957)
+- Sidebar navigation with grouped sections, clearer active states, and a responsive mobile overlay [(#11994)](https://github.com/prowler-cloud/prowler/pull/11994)
+- Core Prowler tools in Lighthouse use the `prowler_*` namespace while preserving legacy `prowler_app_*` compatibility [(#12017)](https://github.com/prowler-cloud/prowler/pull/12017)
+
+### 🐞 Fixed
+
+- The AWS S3 integration CloudFormation quick-create link now sets the bucket owner account ID, preventing a stack validation error when S3 integration is enabled [(#11927)](https://github.com/prowler-cloud/prowler/pull/11927)
+- `Scan ID` filter on the Findings page now shows the active scan when opening findings from a scan's `View Findings` action [(#11997)](https://github.com/prowler-cloud/prowler/pull/11997)
+
+### 🔐 Security
+
+- `js-yaml` to 4.3.0, `@sentry/nextjs` to 10.65.0 with `import-in-the-middle` 3.3.1, and transitive `hono`, `dompurify`, `ws`, `vite`, `@babel/core` and `@opentelemetry/core` to patched versions, resolving 13 npm audit advisories (3 high, 9 moderate, 1 low) plus `hono` CVE-2026-59896, published on NVD but not yet in the npm audit feed [(#12029)](https://github.com/prowler-cloud/prowler/pull/12029)
+
+---
+
+## [1.34.0] (Prowler v5.34.0)
+
+### 🚀 Added
+
+- Dynamically registered providers are now listed, filtered, and rendered across the UI, using a generic icon and humanized label when no bespoke assets exist, a "Custom" badge, and read-only handling for non-configurable providers [(#11869)](https://github.com/prowler-cloud/prowler/pull/11869)
+- Prowler Local Server branding and contextual Prowler Cloud upgrade prompts across navigation, scans, providers, compliance, findings, alerts, and Lighthouse AI [(#11982)](https://github.com/prowler-cloud/prowler/pull/11982)
+
+### 🔄 Changed
+
+- UI components migrated from HeroUI to shared shadcn primitives [(#11532)](https://github.com/prowler-cloud/prowler/pull/11532)
+- UI integration enable flags renamed to past tense — `UI_SENTRY_ENABLE` → `UI_SENTRY_ENABLED`, `UI_GOOGLE_TAG_MANAGER_ENABLE` → `UI_GOOGLE_TAG_MANAGER_ENABLED`, `UI_POSTHOG_ENABLE` → `UI_POSTHOG_ENABLED`; deployments that set the former names must update them [(#11917)](https://github.com/prowler-cloud/prowler/pull/11917)
+
+### 🐞 Fixed
+
+- Fixed metronome billing failing to start when PostHog was enabled, caused by a stale reference to the renamed UI_POSTHOG_ENABLED flag [(#11938)](https://github.com/prowler-cloud/prowler/pull/11938)
+- Lighthouse AI overview entry now starts a new remediation conversation, and returning to Overview restores app navigation mode [(#11955)](https://github.com/prowler-cloud/prowler/pull/11955)
+
+---
+
+## [1.33.1] (Prowler v5.33.1)
+
+### 🔄 Changed
+
+- RBAC role forms now explain Unlimited Visibility inside the Visibility section and keep the setting visible while group selection is hidden [(#11890)](https://github.com/prowler-cloud/prowler/pull/11890)
+
+### 🐞 Fixed
+
+- CIS Level 1 and Level 2 compliance filters now match profiles prefixed with a license tier (e.g. "E3 Level 1"), so M365 CIS requirements are no longer hidden [(#11924)](https://github.com/prowler-cloud/prowler/pull/11924)
+- Jira dispatch polling now reports failed issue creation tasks instead of treating partial failures as successful [(#11925)](https://github.com/prowler-cloud/prowler/pull/11925)
+
+---
+
+## [1.33.0] (Prowler v5.33.0)
+
+### 🚀 Added
+
+- Owners can delete their last organization from the profile page [(#11864)](https://github.com/prowler-cloud/prowler/pull/11864)
+
+### 🔄 Changed
+
+- Organization row actions in the profile page are aligned in fixed columns and the Active indicator now sits next to the organization name [(#11864)](https://github.com/prowler-cloud/prowler/pull/11864)
+- Sentry, Google Tag Manager, and PostHog now load their `UI_*` config only when the matching enable flag (`UI_SENTRY_ENABLE` / `UI_GOOGLE_TAG_MANAGER_ENABLE` / `UI_POSTHOG_ENABLE`) is `"true"` (default off); the deprecated legacy names (`NEXT_PUBLIC_*`, `POSTHOG_KEY`/`POSTHOG_HOST`) still activate without the flag [(#11682)](https://github.com/prowler-cloud/prowler/pull/11682)
+
+---
+
+## [1.32.1] (Prowler v5.32.1)
+
+### 🐞 Fixed
+
+- Invitation callback paths are now preserved when invited users continue with Google, GitHub, or SAML authentication [(#11752)](https://github.com/prowler-cloud/prowler/pull/11752)
+
+### 🔐 Security
+
+- Kubernetes provider credential forms now reject kubeconfigs using `exec` authentication in Prowler Cloud before submission [(#11753)](https://github.com/prowler-cloud/prowler/pull/11753)
+
+---
+
+## [1.32.0] (Prowler v5.32.0)
+
+### 🚀 Added
+
+- Filter the Overview, Findings, Resources, Scans, and Providers views by provider group [(#11659)](https://github.com/prowler-cloud/prowler/pull/11659)
+- CIS Controls v8.1 compliance support, including its detail view and report mapping [(#11700)](https://github.com/prowler-cloud/prowler/pull/11700)
+
+### 🔄 Changed
+
+- Improve scan configuration wording and add a documentation link to clarify baseline settings and how custom scan configurations override them [(#11859)](https://github.com/prowler-cloud/prowler/pull/11859)
+
+---
+
+## [1.31.1] (Prowler v5.31.1)
+
+### 🔄 Changed
+
+- Schedule Scans provider table and launch flows now use provider schedule fields, restore OSS daily scheduling, default to the next local scan hour, and clarify provider selection in launch scan [(#11684)](https://github.com/prowler-cloud/prowler/pull/11684)
+
+---
+
+## [1.31.0] (Prowler v5.31.0)
+
+### 🚀 Added
+
+- Controlled `402` and `403` Server Action error messages for alert seed and mutation flows [(#11629)](https://github.com/prowler-cloud/prowler/pull/11629)
+
+### 🐞 Fixed
+
+- Attack Paths now shows distinct messages while a scan is queued, running, or building its graph — plus a separate "couldn't load scans" error — instead of always showing "No scans available" [(#11512)](https://github.com/prowler-cloud/prowler/pull/11512)
+- Radio button no longer shifts vertically when selected [(#11608)](https://github.com/prowler-cloud/prowler/pull/11608)
+- Handle rename DORA to DORA_2022_2554 to follow the naming <name>_<version> in compliance frameworks [(#11551)](https://github.com/prowler-cloud/prowler/pull/11551)
+
+### 🔐 Security
+
+- Bump vulnerable `Next.js`, React, AI SDK, `postcss`, `hono`, `qs`, `esbuild`, and Alpine OpenSSL packages (`libcrypto3` and `libssl3`) [(#11581)](https://github.com/prowler-cloud/prowler/pull/11581)
+- Bump transitive `dompurify` from 3.4.2 to 3.4.10, patching XSS sanitization bypass advisories [(#11636)](https://github.com/prowler-cloud/prowler/pull/11636)
+
+---
+
+## [1.30.1] (Prowler v5.30.1)
+
+### 🐞 Fixed
+
+- Threat Map no longer shows an empty map for accounts that only have Okta or Google Workspace scans [(#11542)](https://github.com/prowler-cloud/prowler/pull/11542)
+- Compliance attributes requests now pass the selected scan, so multi-provider universal frameworks (e.g. CSA CCM) load the check IDs of the scan's provider and Azure/GCP requirement details show their findings instead of appearing empty [(#11546)](https://github.com/prowler-cloud/prowler/pull/11546)
+
+### 🔄 Changed
+
+- Public SaaS config (Sentry, Google Tag Manager, API base/docs URL) now resolves at container runtime instead of build time; self-hosted deployments set the UI config through the new `UI_`-prefixed env vars (`UI_API_BASE_URL`, `UI_API_DOCS_URL`, `UI_GOOGLE_TAG_MANAGER_ID`, `UI_SENTRY_DSN`, `UI_SENTRY_ENVIRONMENT`), with the previous `NEXT_PUBLIC_*` names still honored as a deprecated fallback [(#11500)](https://github.com/prowler-cloud/prowler/pull/11500)
+
+### 🐞 Fixed
+
+- `ui/.env` template now lists only the canonical `UI_SENTRY_DSN` and `UI_SENTRY_ENVIRONMENT` names; the deprecated `NEXT_PUBLIC_SENTRY_DSN` and `NEXT_PUBLIC_SENTRY_ENVIRONMENT` entries have been removed [(#11500)](https://github.com/prowler-cloud/prowler/pull/11500)
+
+---
+
+## [1.30.0] (Prowler v5.30.0)
+
+### 🚀 Added
+
+- DISA Okta IDaaS STIG V1R2 compliance framework support with its dedicated mapper, details panel, and icon [(#11428)](https://github.com/prowler-cloud/prowler/pull/11428)
+- DORA compliance framework support [(#11131)](https://github.com/prowler-cloud/prowler/pull/11131)
+
+### 🔄 Changed
+
+- Renamed "Customer Support" to "Support Desk" in the side menu, showing it only in Prowler Cloud/Enterprise, while "Community Support" now shows only in Prowler OSS [(#11508)](https://github.com/prowler-cloud/prowler/pull/11508)
+- Compliance detail page now shows a "still loading" retry state while the API warms its compliance catalog, instead of rendering an empty page [(#11530)](https://github.com/prowler-cloud/prowler/pull/11530)
+
+### 🐞 Fixed
+
+- Risk Pipeline Sankey chart now adapts height and node spacing for dense provider datasets, keeping provider and severity labels readable [(#11527)](https://github.com/prowler-cloud/prowler/pull/11527)
+
+---
+
+## [1.29.3] (Prowler v5.29.3)
+
+### 🐞 Fixed
+
+- Finding drawer tabs now keep the active tab text and underline styling when tooltip state changes [(#11493)](https://github.com/prowler-cloud/prowler/pull/11493)
+
+---
+
+## [1.29.2] (Prowler v5.29.2)
+
+### 🔄 Changed
+
+- Account and provider-type selector triggers now show the provider icon, with a non-deduped icon stack [(#11424)](https://github.com/prowler-cloud/prowler/pull/11424)
+
+### 🐞 Fixed
+
+- Add Provider modal now closes without reloading the providers page [(#11424)](https://github.com/prowler-cloud/prowler/pull/11424)
+- Users page now shows the "Delete User" action only on the current user's row, matching the backend rule that a user can only delete their own account [(#11447)](https://github.com/prowler-cloud/prowler/pull/11447)
+
+### 🔐 Security
+
+- Vitest toolchain upgraded `4.0.18` → `4.1.8` to clear two critical `pnpm audit` advisories [(#11424)](https://github.com/prowler-cloud/prowler/pull/11424)
+
+---
+
+## [1.29.0] (Prowler v5.29.0)
+
+### 🚀 Added
+
+- Restyle `Scan Jobs` view with specific In Progress, Completed, Scheduled tabs [(#11258)](https://github.com/prowler-cloud/prowler/pull/11258)
+
+### 🔄 Changed
+
+- Dark mode: pure-black canvas, pure-white primary text, and brighter border / input tokens for clearer separation between cards, tables, and inputs [(#11073)](https://github.com/prowler-cloud/prowler/pull/11073)
+- CI workflows (`ui-tests.yml`, `ui-e2e-tests-v2.yml`) now read the Node version from `ui/.nvmrc` and the pnpm version from `package.json#packageManager` instead of hardcoded values [(#11225)](https://github.com/prowler-cloud/prowler/pull/11225)
+
+### 🐞 Fixed
+
+- Compliance page now loads the most recent scan when opened from the sidebar instead of showing the "no compliance data available" alert [(#11374)](https://github.com/prowler-cloud/prowler/pull/11374)
+- Invitation links now show specific expired, no-longer-valid, and invalid-token messages based on API error responses [(#11376)](https://github.com/prowler-cloud/prowler/pull/11376)
+- Jira dispatch and provider connection-test polling no longer show a false timeout for longer-running tasks; both poll windows now extend to 60 seconds [(#11519)](https://github.com/prowler-cloud/prowler/pull/11519)
+
+### 🔐 Security
+
+- `pnpm` upgraded to 11 with supply-chain defaults consolidated in `pnpm-workspace.yaml` and `trustPolicyExclude` entries pinned to exact versions [(#11225)](https://github.com/prowler-cloud/prowler/pull/11225)
+- `uuid` pinned to `11.1.1` via `pnpm-workspace.yaml#overrides` to clear `GHSA-w5hq-g745-h8pq` (missing bounds check in `v3`/`v5`/`v6` name-based generators with `buf`) in the transitive tree [(#11225)](https://github.com/prowler-cloud/prowler/pull/11225)
+
+---
+
+## [1.28.1] (Prowler v5.28.1)
+
+### 🐞 Fixed
+
+- Large scan report ZIP downloads now stream through a Next.js Route Handler instead of buffering the full file in a Server Action [(#11330)](https://github.com/prowler-cloud/prowler/pull/11330)
+- Compliance requirement findings table now respects the page size selector [(#11365)](https://github.com/prowler-cloud/prowler/pull/11365)
+
+---
+
+## [1.28.0] (Prowler v5.28.0)
+
+### 🚀 Added
+
+- `okta` provider support with OAuth 2.0 private-key JWT credentials form (client ID + PEM private key) [(#11213)](https://github.com/prowler-cloud/prowler/pull/11213)
+- "Resource Metadata / Evidence" tab in the finding detail drawer [(#11187)](https://github.com/prowler-cloud/prowler/pull/11187)
+
+### 🐞 Fixed
+
+- Resource detail panels: metadata editor now scrolls internally with the minimal scrollbar across the finding drawer and `/resources/:id`, tab labels truncate with tooltips on narrow widths, and "View in AWS Console" moved from the resource UID row to the resource actions menu [(#11325)](https://github.com/prowler-cloud/prowler/pull/11325)
+
+---
+
+## [1.27.0] (Prowler v5.27.0)
+
+### 🚀 Added
+
+- Health endpoint at `GET /api/health` for Docker Compose liveness checks [(#11145)](https://github.com/prowler-cloud/prowler/pull/11145)
+- AWS findings and resource details now expose a "View in AWS Console" link that opens the resource directly in the AWS Console via the universal `/go/view` ARN resolver [(#9172)](https://github.com/prowler-cloud/prowler/pull/9172)
+- Lighthouse AI: Prowler App Finding Groups MCP tools [(#11140)](https://github.com/prowler-cloud/prowler/pull/11140)
+
+### 🔄 Changed
+
+- Trimmed unused `npm` dependencies [(#11115)](https://github.com/prowler-cloud/prowler/pull/11115)
+- Faster, stricter pre-commit: prek lints and formats only staged UI files (husky removed), with Prettier and ESLint (`--max-warnings 40`, stale-disable detection) now covering the full UI workspace, including `public/` assets [(#11118)](https://github.com/prowler-cloud/prowler/pull/11118)
+- Attack Paths graph now uses React Flow with improved layout, interactions, export, minimap, and browser test coverage [(#10686)](https://github.com/prowler-cloud/prowler/pull/10686)
+- SAML ACS URL is only shown if the email domain is configured [(#11144)](https://github.com/prowler-cloud/prowler/pull/11144)
+- "View Resource" action in the finding resource detail drawer is now an icon-only link rendered next to the resource name (instead of a text button in the UID row), keeping the "View in AWS Console" link unchanged [(#11193)](https://github.com/prowler-cloud/prowler/pull/11193)
+
+### 🐞 Fixed
+
+- Mute Findings modal now enforces the 100-character limit on the rule name input with a live counter and inline error, matching the existing reason field behaviour [(#11158)](https://github.com/prowler-cloud/prowler/pull/11158)
+- Finding drawer no longer renders literal backticks around inline code in Risk, Description and Remediation sections [(#11142)](https://github.com/prowler-cloud/prowler/pull/11142)
+- Launch Scan first-provider wizard continues after provider creation instead of resetting the Scans page [(#11136)](https://github.com/prowler-cloud/prowler/pull/11136)
+- Attack Paths graph nodes now wrap long resource and finding labels, indicate truncated values with `…`, and show the full value in an immediate tooltip [(#11197)](https://github.com/prowler-cloud/prowler/pull/11197)
+
+### 🔐 Security
+
+- `npm` dependencies updated to patched versions for Next.js, Vite, LangChain, XML parsing, lodash, and related transitive packages [(#11173)](https://github.com/prowler-cloud/prowler/pull/11173)
+- Hardened `npm` supply chain controls [(#11157)](https://github.com/prowler-cloud/prowler/pull/11157)
+
+---
+
+## [1.26.1] (Prowler 5.26.1)
+
+### 🐞 Fixed
+
+- Role form Cancel buttons now return to Roles [(#11125)](https://github.com/prowler-cloud/prowler/pull/11125)
+- Shared select dropdowns stay constrained and scrollable inside modals [(#11125)](https://github.com/prowler-cloud/prowler/pull/11125)
+
+---
+
+## [1.26.0] (Prowler v5.26.0)
+
+### 🚀 Added
+
+- ASD Essential Eight compliance framework support [(#11071)](https://github.com/prowler-cloud/prowler/pull/11071)
+
+### 🔄 Changed
+
+- Standardized "Providers" wording across UI and documentation, replacing legacy "Cloud Providers" / "Accounts" / "Account Groups" copy [(#10971)](https://github.com/prowler-cloud/prowler/pull/10971)
+- Finding detail drawer now labels remediation actions from finding-level recommendation URLs by destination: "View CVE", "View in Prowler Hub", "View Advisory", or "View Reference", while keeping URL-only remediation cards labeled [(#10853)](https://github.com/prowler-cloud/prowler/pull/10853)
+- Finding detail drawer reorganized: status-colored banner below the resource info, dedicated Remediation tab, renamed "Findings for this resource" tab, and inline View Resource link next to the resource UID [(#11091)](https://github.com/prowler-cloud/prowler/pull/11091)
+- ThreatScore compliance views: canonical pillar order across all charts and the accordion, clickable pillars on `/compliance` that anchor the detail page, Top Failed Sections always shows the full pillar set, and donut tooltip now triggers on every segment [(#10975)](https://github.com/prowler-cloud/prowler/pull/10975)
+
+---
+
+## [1.25.3] (Prowler v5.25.3)
+
+### 🐞 Fixed
+
+- CLI command in the finding drawer no longer renders the line-number gutter, matching the original styled block while removing the leading `1` [(#11059)](https://github.com/prowler-cloud/prowler/pull/11059)
+
+---
+
+## [1.25.2] (Prowler v5.25.2)
+
+### 🔄 Changed
+
+- Compliance cards: progress bar now spans the full card width, the passing-requirements caption sits beside the framework logo under the title, and the ISO 27001 logo asset is recentered within its tile [(#10939)](https://github.com/prowler-cloud/prowler/pull/10939)
+- Findings expanded resource rows now drop the redundant cube icons, render Service and Region with the same compact label style as Last seen and Failing for, and reorder columns to Status, Resource, Provider, Severity, then field labels [(#10949)](https://github.com/prowler-cloud/prowler/pull/10949)
+
+---
+
+## [1.25.1] (Prowler v5.25.1)
+
+### 🐞 Fixed
+
+- Compliance page export menu now scales on small screens, and frameworks load on first render without requiring a manual scan re-selection [(#10918)](https://github.com/prowler-cloud/prowler/pull/10918)
+
+---
+
 ## [1.25.0] (Prowler v5.25.0)
 
 ### 🚀 Added
@@ -13,12 +465,13 @@ All notable changes to the **Prowler UI** are documented in this file.
 ### 🔄 Changed
 
 - Redesign compliance page, client-side search for compliance frameworks, compact scan selector trigger, enhanced compliance cards [(#10767)](https://github.com/prowler-cloud/prowler/pull/10767)
-- Allows tenant owners to expel users from their organizations  [(#10787)](https://github.com/prowler-cloud/prowler/pull/10787)
+- Allows tenant owners to expel users from their organizations [(#10787)](https://github.com/prowler-cloud/prowler/pull/10787)
 - Shared filter dropdowns now support local option search and auto-scroll to the first visible match across table and provider filters [(#10859)](https://github.com/prowler-cloud/prowler/pull/10859)
 - Backward-compatibility middleware redirect from `/sign-up?invitation_token=…` to `/invitation/accept?invitation_token=…`; new invitation emails use `/invitation/accept` directly [(#10797)](https://github.com/prowler-cloud/prowler/pull/10797)
 - Mutelist improvements: table now supports name/reason search and visual count badges for finding targets [(#10846)](https://github.com/prowler-cloud/prowler/pull/10846)
 - Resources now use batch-applied filters, render metadata JSON with syntax highlighting, and more [(#10861)](https://github.com/prowler-cloud/prowler/pull/10861)
 - Table pagination controls now keep their arrows visible on hover in light theme, and more UI improvements [(#10862)](https://github.com/prowler-cloud/prowler/pull/10862)
+- Fix rows-per-page selector silently ignoring changes in URL-driven tables by unifying `DataTable` pagination into a single `onPaginationChange` callback [(#10863)](https://github.com/prowler-cloud/prowler/pull/10863)
 
 ---
 

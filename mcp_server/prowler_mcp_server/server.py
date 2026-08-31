@@ -1,62 +1,73 @@
-import asyncio
-
 from fastmcp import FastMCP
-from prowler_mcp_server import __version__
-from prowler_mcp_server.lib.logger import logger
 from starlette.responses import JSONResponse
 
-prowler_mcp_server = FastMCP("prowler-mcp-server")
+from prowler_mcp_server import __version__
+from prowler_mcp_server.lib.errors import SharedFailureMiddleware
+from prowler_mcp_server.lib.logger import logger
+
+# `mask_error_details` keeps an unhandled failure from relaying text this server
+# does not control. It is set on every sub-server as well, because it does not
+# reach mounted children -- FastMCP warns about exactly that at mount time.
+prowler_mcp_server = FastMCP("prowler-mcp-server", mask_error_details=True)
+
+# Middleware, unlike masking, does reach mounted children, so the classifier that
+# gives the masked failures a sentence back is wired here once.
+prowler_mcp_server.add_middleware(SharedFailureMiddleware())
 
 
-async def setup_main_server():
+def setup_main_server():
     """Set up the main Prowler MCP server with all available integrations."""
-    # Import Prowler Hub tools with prowler_hub_ prefix
+    # Mount Prowler Hub tools with prowler_hub_ namespace
     try:
-        logger.info("Importing Prowler Hub server...")
+        logger.info("Mounting Prowler Hub server...")
         from prowler_mcp_server.prowler_hub.server import hub_mcp_server
 
-        await prowler_mcp_server.import_server(hub_mcp_server, prefix="prowler_hub")
-        logger.info("Successfully imported Prowler Hub server")
+        prowler_mcp_server.mount(hub_mcp_server, namespace="prowler_hub")
+        logger.info("Successfully mounted Prowler Hub server")
     except Exception as e:
-        logger.error(f"Failed to import Prowler Hub server: {e}")
+        logger.error(f"Failed to mount Prowler Hub server: {e}")
 
-    # Import Prowler App tools with prowler_app_ prefix
+    # Mount core Prowler tools with prowler_ namespace
     try:
-        logger.info("Importing Prowler App server...")
+        logger.info("Mounting Prowler tools server...")
         from prowler_mcp_server.prowler_app.server import app_mcp_server
 
-        await prowler_mcp_server.import_server(app_mcp_server, prefix="prowler_app")
-        logger.info("Successfully imported Prowler App server")
+        prowler_mcp_server.mount(app_mcp_server, namespace="prowler")
+        logger.info("Successfully mounted Prowler tools server")
     except Exception as e:
-        logger.error(f"Failed to import Prowler App server: {e}")
+        logger.error(f"Failed to mount Prowler tools server: {e}")
 
-    # Import Prowler Documentation tools with prowler_docs_ prefix
+    # Mount Prowler Documentation tools with prowler_docs_ namespace
     try:
-        logger.info("Importing Prowler Documentation server...")
+        logger.info("Mounting Prowler Documentation server...")
         from prowler_mcp_server.prowler_documentation.server import docs_mcp_server
 
-        await prowler_mcp_server.import_server(docs_mcp_server, prefix="prowler_docs")
-        logger.info("Successfully imported Prowler Documentation server")
+        prowler_mcp_server.mount(docs_mcp_server, namespace="prowler_docs")
+        logger.info("Successfully mounted Prowler Documentation server")
     except Exception as e:
-        logger.error(f"Failed to import Prowler Documentation server: {e}")
+        logger.error(f"Failed to mount Prowler Documentation server: {e}")
 
 
-# Add health check endpoint
+# Response follows the IETF Health Check Response Format
+# (draft-inadarei-api-health-check-06). `version` is the contract version of
+# this endpoint; `releaseId` is the package build version.
 @prowler_mcp_server.custom_route("/health", methods=["GET"])
-async def health_check(request) -> JSONResponse:
+async def health_check(_request) -> JSONResponse:
     """Health check endpoint."""
     return JSONResponse(
-        {"status": "healthy", "service": "prowler-mcp-server", "version": __version__}
+        {
+            "status": "pass",
+            "version": "1",
+            "releaseId": __version__,
+            "serviceId": "prowler-mcp-server",
+            "description": "Prowler MCP Server",
+        },
+        media_type="application/health+json",
+        headers={"Cache-Control": "no-store"},
     )
 
 
-# Get or create the event loop
-try:
-    loop = asyncio.get_running_loop()
-    # If we have a running loop, schedule the setup as a task
-    loop.create_task(setup_main_server())
-except RuntimeError:
-    # No running loop, use asyncio.run (for standalone execution)
-    asyncio.run(setup_main_server())
+setup_main_server()
 
-app = prowler_mcp_server.http_app()
+# ASGI app for uvicorn deployments; stateless to avoid retaining sessions
+app = prowler_mcp_server.http_app(stateless_http=True)

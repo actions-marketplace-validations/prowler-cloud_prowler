@@ -1,3 +1,5 @@
+import type { ProviderType } from "./providers";
+
 export const REQUIREMENT_STATUS = {
   PASS: "PASS",
   FAIL: "FAIL",
@@ -7,6 +9,17 @@ export const REQUIREMENT_STATUS = {
 
 export type RequirementStatus =
   (typeof REQUIREMENT_STATUS)[keyof typeof REQUIREMENT_STATUS];
+
+/** Tabs of the compliance overview page. Multiple Scans is the default
+ *  landing tab, so it owns the bare `/compliance` route and Single Scan is
+ *  reachable through `?tab=per-scan`. */
+export const COMPLIANCE_TAB = {
+  PER_SCAN: "per-scan",
+  CROSS_PROVIDER: "cross-provider",
+} as const;
+
+export type ComplianceTab =
+  (typeof COMPLIANCE_TAB)[keyof typeof COMPLIANCE_TAB];
 
 export const COMPLIANCE_OVERVIEW_TYPE = {
   OVERVIEW: "compliance-overviews",
@@ -41,10 +54,16 @@ export interface Requirement {
   fail: number;
   manual: number;
   check_ids: string[];
+  // True when the FAIL is caused solely by an invalid scan config.
+  invalid_config?: boolean;
   // This is to allow any key to be added to the requirement object
   // because each compliance has different keys
   [key: string]: string | string[] | number | boolean | object[] | undefined;
 }
+
+/** Check id → provider types it belongs to, for provider-labeled check
+ *  lists in the cross-provider view (a check can exist in several). */
+export type CheckProviderTypesMap = Partial<Record<string, ProviderType[]>>;
 
 export interface Control {
   label: string;
@@ -60,6 +79,7 @@ export interface Category {
   fail: number;
   manual: number;
   controls: Control[];
+  percentualScore?: number;
 }
 
 export interface Framework {
@@ -89,6 +109,10 @@ export type TopFailedDataType =
 export interface TopFailedResult {
   items: FailedSection[];
   type: TopFailedDataType;
+  // True when items already cover every relevant category (zero-fill). The
+  // chart should render the supplied list as-is instead of falling back to
+  // severity placeholders when totals are zero.
+  prepopulated?: boolean;
 }
 
 export interface RequirementsTotals {
@@ -120,7 +144,7 @@ export interface ISO27001AttributesMetadata {
 export interface CISAttributesMetadata {
   Section: string;
   SubSection: string | null;
-  Profile: string; // "Level 1" or "Level 2"
+  Profile: string; // "Level 1"/"Level 2" (M365 prefixes the tier: "E3 Level 1", "E5 Level 2")
   AssessmentStatus: string; // "Manual" or "Automated"
   Description: string;
   RationaleStatement: string;
@@ -219,6 +243,237 @@ export interface CCCAttributesMetadata {
   }>;
 }
 
+// ASD Essential Eight enums — modelled on the canonical Maturity Model
+// (Nov 2023). Only ML1 ships today; ML2/ML3 are scoped out of the framework
+// but kept here so the type covers any future expansion without a schema
+// edit. AssessmentStatus and CloudApplicability are exhaustive per the JSON
+// fixture; new variants must be added explicitly.
+export const ASD_MATURITY_LEVEL = {
+  ML1: "ML1",
+  ML2: "ML2",
+  ML3: "ML3",
+} as const;
+export type ASDMaturityLevel =
+  (typeof ASD_MATURITY_LEVEL)[keyof typeof ASD_MATURITY_LEVEL];
+
+export const ASD_ASSESSMENT_STATUS = {
+  AUTOMATED: "Automated",
+  MANUAL: "Manual",
+} as const;
+export type ASDAssessmentStatus =
+  (typeof ASD_ASSESSMENT_STATUS)[keyof typeof ASD_ASSESSMENT_STATUS];
+
+export const ASD_CLOUD_APPLICABILITY = {
+  FULL: "full",
+  PARTIAL: "partial",
+  LIMITED: "limited",
+  NON_APPLICABLE: "non-applicable",
+} as const;
+export type ASDCloudApplicability =
+  (typeof ASD_CLOUD_APPLICABILITY)[keyof typeof ASD_CLOUD_APPLICABILITY];
+
+export interface ASDEssentialEightAttributesMetadata {
+  Section: string;
+  MaturityLevel: ASDMaturityLevel;
+  AssessmentStatus: ASDAssessmentStatus;
+  CloudApplicability: ASDCloudApplicability;
+  MitigatedThreats: string[];
+  Description: string;
+  RationaleStatement: string;
+  ImpactStatement: string;
+  RemediationProcedure: string;
+  AuditProcedure: string;
+  AdditionalInformation: string;
+  References: string;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isOneOf = <T extends string>(
+  values: Record<string, T>,
+  value: unknown,
+): value is T => (Object.values(values) as T[]).includes(value as T);
+
+const isStringArray = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((item) => typeof item === "string");
+
+const isOptionalString = (value: unknown): value is string | undefined =>
+  value === undefined || typeof value === "string";
+
+const isOptionalStringArray = (value: unknown): value is string[] | undefined =>
+  value === undefined || isStringArray(value);
+
+const ASD_METADATA_STRING_FIELDS = [
+  "Section",
+  "Description",
+  "RationaleStatement",
+  "ImpactStatement",
+  "RemediationProcedure",
+  "AuditProcedure",
+  "AdditionalInformation",
+  "References",
+] as const satisfies readonly (keyof ASDEssentialEightAttributesMetadata)[];
+
+export const isASDMaturityLevel = (value: unknown): value is ASDMaturityLevel =>
+  isOneOf(ASD_MATURITY_LEVEL, value);
+
+export const isASDAssessmentStatus = (
+  value: unknown,
+): value is ASDAssessmentStatus => isOneOf(ASD_ASSESSMENT_STATUS, value);
+
+export const isASDCloudApplicability = (
+  value: unknown,
+): value is ASDCloudApplicability => isOneOf(ASD_CLOUD_APPLICABILITY, value);
+
+export const isASDEssentialEightAttributesMetadata = (
+  value: unknown,
+): value is ASDEssentialEightAttributesMetadata =>
+  isRecord(value) &&
+  ASD_METADATA_STRING_FIELDS.every(
+    (field) => typeof value[field] === "string",
+  ) &&
+  isASDMaturityLevel(value.MaturityLevel) &&
+  isASDAssessmentStatus(value.AssessmentStatus) &&
+  isASDCloudApplicability(value.CloudApplicability) &&
+  isStringArray(value.MitigatedThreats);
+
+export interface ASDEssentialEightRequirement extends Requirement {
+  maturity_level: ASDEssentialEightAttributesMetadata["MaturityLevel"];
+  assessment_status: ASDEssentialEightAttributesMetadata["AssessmentStatus"];
+  cloud_applicability: ASDEssentialEightAttributesMetadata["CloudApplicability"];
+  mitigated_threats: ASDEssentialEightAttributesMetadata["MitigatedThreats"];
+  implementation_notes: ASDEssentialEightAttributesMetadata["Description"];
+  rationale_statement: ASDEssentialEightAttributesMetadata["RationaleStatement"];
+  impact_statement: ASDEssentialEightAttributesMetadata["ImpactStatement"];
+  remediation_procedure: ASDEssentialEightAttributesMetadata["RemediationProcedure"];
+  audit_procedure: ASDEssentialEightAttributesMetadata["AuditProcedure"];
+  additional_information: ASDEssentialEightAttributesMetadata["AdditionalInformation"];
+  references: ASDEssentialEightAttributesMetadata["References"];
+}
+
+export interface OktaIDaaSStigAttributesMetadata {
+  Section: string;
+  Severity: string;
+  RuleID: string;
+  StigID: string;
+  CCI?: string[];
+  CheckText?: string;
+  FixText?: string;
+}
+
+const OKTA_IDAAS_STIG_REQUIRED_STRING_FIELDS = [
+  "Section",
+  "Severity",
+  "RuleID",
+  "StigID",
+] as const satisfies readonly (keyof OktaIDaaSStigAttributesMetadata)[];
+
+export const isOktaIDaaSStigAttributesMetadata = (
+  value: unknown,
+): value is OktaIDaaSStigAttributesMetadata =>
+  isRecord(value) &&
+  OKTA_IDAAS_STIG_REQUIRED_STRING_FIELDS.every(
+    (field) => typeof value[field] === "string",
+  ) &&
+  isOptionalStringArray(value.CCI) &&
+  isOptionalString(value.CheckText) &&
+  isOptionalString(value.FixText);
+
+export interface OktaIDaaSStigRequirement extends Requirement {
+  severity: OktaIDaaSStigAttributesMetadata["Severity"];
+  rule_id: OktaIDaaSStigAttributesMetadata["RuleID"];
+  stig_id: OktaIDaaSStigAttributesMetadata["StigID"];
+  cci: OktaIDaaSStigAttributesMetadata["CCI"];
+  check_text: OktaIDaaSStigAttributesMetadata["CheckText"];
+  fix_text: OktaIDaaSStigAttributesMetadata["FixText"];
+}
+
+// DORA (Digital Operational Resilience Act, Regulation (EU) 2022/2554).
+// Universal framework — flat attributes dict with Pillar/Article/ArticleTitle.
+// `Pillar` is the canonical grouping key for tables and PDF; the enum mirrors
+// the five DORA pillars declared in `prowler/compliance/dora_2022_2554.json`.
+export const DORA_PILLAR = {
+  ICT_RISK_MANAGEMENT: "ICT Risk Management",
+  INCIDENT_REPORTING: "ICT-Related Incident Reporting",
+  RESILIENCE_TESTING: "Digital Operational Resilience Testing",
+  THIRD_PARTY_RISK: "ICT Third-Party Risk Management",
+  INFORMATION_SHARING: "Information Sharing",
+} as const;
+export type DORAPillar = (typeof DORA_PILLAR)[keyof typeof DORA_PILLAR];
+
+export interface DORAAttributesMetadata {
+  Pillar: DORAPillar;
+  Article: string;
+  ArticleTitle: string;
+}
+
+export interface DORARequirement extends Requirement {
+  pillar: DORAAttributesMetadata["Pillar"];
+  article: DORAAttributesMetadata["Article"];
+  article_title: DORAAttributesMetadata["ArticleTitle"];
+}
+
+export interface CISControlsAttributesMetadata {
+  Section: string;
+  Function: string | null;
+  AssetType: string | null;
+  ImplementationGroups: string[] | null;
+}
+
+export interface CISControlsRequirement extends Requirement {
+  function?: string;
+  asset_type?: string;
+  implementation_groups?: string[];
+}
+
+// Universal framework — flat attributes dict with Theme/AssessmentStatus/
+// CloudApplicability/RemediationProcedure/References. `Theme` is the canonical
+// grouping key for tables and PDF; the enum mirrors the five Cyber Essentials
+// control themes declared in `prowler/compliance/cyber_essentials_3.3.json`.
+export const CYBER_ESSENTIALS_THEME = {
+  FIREWALLS: "Firewalls",
+  SECURE_CONFIGURATION: "Secure Configuration",
+  SECURITY_UPDATE_MANAGEMENT: "Security Update Management",
+  USER_ACCESS_CONTROL: "User Access Control",
+  MALWARE_PROTECTION: "Malware Protection",
+} as const;
+export type CyberEssentialsTheme =
+  (typeof CYBER_ESSENTIALS_THEME)[keyof typeof CYBER_ESSENTIALS_THEME];
+
+export interface CyberEssentialsAttributesMetadata {
+  Theme: CyberEssentialsTheme;
+  AssessmentStatus: string; // "Automated" or "Manual"
+  CloudApplicability: string; // "full", "partial" or "non-applicable"
+  RemediationProcedure: string;
+  References: string;
+}
+
+export interface CyberEssentialsRequirement extends Requirement {
+  theme: CyberEssentialsAttributesMetadata["Theme"];
+  assessment_status: CyberEssentialsAttributesMetadata["AssessmentStatus"];
+  cloud_applicability: CyberEssentialsAttributesMetadata["CloudApplicability"];
+  remediation_procedure: CyberEssentialsAttributesMetadata["RemediationProcedure"];
+  references: CyberEssentialsAttributesMetadata["References"];
+}
+
+// CMMC 2.0 (Cybersecurity Maturity Model Certification, 32 CFR Part 170).
+// Universal framework — flat attributes dict with Domain/Level/SourceRequirement.
+// `Domain` is the grouping key; `Level` (1/2/3) and `SourceRequirement` are
+// surfaced in the requirement detail drawer.
+export const CMMC_LEVEL = {
+  LEVEL_1: "Level 1",
+  LEVEL_2: "Level 2",
+  LEVEL_3: "Level 3",
+} as const;
+export type CMMCLevel = (typeof CMMC_LEVEL)[keyof typeof CMMC_LEVEL];
+
+export interface CMMCAttributesMetadata {
+  Domain: string;
+  Level: CMMCLevel;
+  SourceRequirement: string;
+}
+
 export interface AttributesItemData {
   type: "compliance-requirements-attributes";
   id: string;
@@ -240,6 +495,12 @@ export interface AttributesItemData {
         | MITREAttributesMetadata[]
         | CCCAttributesMetadata[]
         | CSAAttributesMetadata[]
+        | ASDEssentialEightAttributesMetadata[]
+        | OktaIDaaSStigAttributesMetadata[]
+        | DORAAttributesMetadata[]
+        | CISControlsAttributesMetadata[]
+        | CyberEssentialsAttributesMetadata[]
+        | CMMCAttributesMetadata[]
         | GenericAttributesMetadata[];
       check_ids: string[];
       // MITRE structure
@@ -261,6 +522,8 @@ export interface RequirementItemData {
     version: string;
     description: string;
     status: RequirementStatus;
+    // True when the FAIL is caused solely by an invalid scan config.
+    invalid_config?: boolean;
     // For Threat compliance:
     passed_findings?: number;
     total_findings?: number;

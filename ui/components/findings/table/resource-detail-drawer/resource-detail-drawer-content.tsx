@@ -2,7 +2,6 @@
 
 import {
   Box,
-  CircleArrowRight,
   CircleChevronLeft,
   CircleChevronRight,
   Container,
@@ -15,13 +14,20 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 
-import { getCompliancesOverview } from "@/actions/compliances";
-import type { ResourceDrawerFinding } from "@/actions/findings";
+import {
+  loadFindingTriageDetail,
+  loadLatestFindingTriageNote,
+  type ResourceDrawerFinding,
+  updateFindingTriage,
+} from "@/actions/findings";
+import {
+  requestPanelChatMessage,
+  requestPanelSkillLaunch,
+} from "@/app/(prowler)/lighthouse/_lib/panel-chat-store";
+import { JiraDispatchActionItem } from "@/components/findings/jira-dispatch-action-item";
 import { MarkdownContainer } from "@/components/findings/markdown-container";
 import { MuteFindingsModal } from "@/components/findings/mute-findings-modal";
-import { SendToJiraModal } from "@/components/findings/send-to-jira-modal";
 import { getComplianceIcon } from "@/components/icons";
-import { JiraIcon } from "@/components/icons/services/IconServices";
 import {
   Badge,
   Button,
@@ -32,27 +38,15 @@ import {
   TabsTrigger,
 } from "@/components/shadcn";
 import { Card } from "@/components/shadcn/card/card";
+import { CodeSnippet } from "@/components/shadcn/code-snippet/code-snippet";
 import {
   ActionDropdown,
   ActionDropdownItem,
 } from "@/components/shadcn/dropdown";
+import { DateWithTime } from "@/components/shadcn/entities/date-with-time";
+import { EntityInfo } from "@/components/shadcn/entities/entity-info";
 import { Skeleton } from "@/components/shadcn/skeleton/skeleton";
 import { LoadingState } from "@/components/shadcn/spinner/loading-state";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/shadcn/tooltip";
-import { EventsTimeline } from "@/components/shared/events-timeline/events-timeline";
-import {
-  QUERY_EDITOR_LANGUAGE,
-  QueryCodeEditor,
-  type QueryEditorLanguage,
-} from "@/components/shared/query-code-editor";
-import { CodeSnippet } from "@/components/ui/code-snippet/code-snippet";
-import { CustomLink } from "@/components/ui/custom/custom-link";
-import { DateWithTime } from "@/components/ui/entities/date-with-time";
-import { EntityInfo } from "@/components/ui/entities/entity-info";
 import {
   Table,
   TableBody,
@@ -60,24 +54,63 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table";
-import { SeverityBadge } from "@/components/ui/table/severity-badge";
+} from "@/components/shadcn/table";
+import { SeverityBadge } from "@/components/shadcn/table/severity-badge";
 import {
   type FindingStatus,
   StatusFindingBadge,
-} from "@/components/ui/table/status-finding-badge";
-import { getFailingForLabel } from "@/lib/date-utils";
-import { formatDuration } from "@/lib/date-utils";
+} from "@/components/shadcn/table/status-finding-badge";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/shadcn/tooltip";
+import { EventsTimeline } from "@/components/shared/events-timeline/events-timeline";
+import { resolveExternalTarget } from "@/components/shared/external-resource-link";
+import {
+  QUERY_EDITOR_LANGUAGE,
+  QueryCodeEditor,
+  type QueryEditorLanguage,
+} from "@/components/shared/query-code-editor";
+import { ResourceMetadataPanel } from "@/components/shared/resource-metadata-panel";
+import { useLighthouseCurrentContext } from "@/hooks/use-lighthouse-context";
+import { getFailingForLabel, formatDuration } from "@/lib/date-utils";
+import { shouldRefreshAfterTriageUpdate } from "@/lib/finding-triage";
+import { buildJiraActionLabel } from "@/lib/jira-dispatch-action";
+import { createJiraDispatchPayload } from "@/lib/jira-dispatch-selection";
 import { getRegionFlag } from "@/lib/region-flags";
-import { cn } from "@/lib/utils";
-import type { ComplianceOverviewData } from "@/types/compliance";
+import { isCloud } from "@/lib/shared/env";
+import { getRecommendationLinkLabel } from "@/lib/vulnerability-references";
+import { SIDE_PANEL_TAB, useSidePanelStore } from "@/store/side-panel";
+import type { FindingComplianceFramework } from "@/types/compliance-watchlist";
 import type { FindingResourceRow } from "@/types/findings-table";
+import type {
+  FindingTriageUpdateResult,
+  UpdateFindingTriageInput,
+} from "@/types/findings-triage";
+import { JIRA_DISPATCH_TARGET } from "@/types/integrations";
+import {
+  SKILL_LAUNCHER_VARIANT,
+  type LighthouseSkillDefinition,
+} from "@/types/lighthouse-skills";
 
 import { Muted } from "../../muted";
 import { DeltaIndicator } from "../delta-indicator";
+import {
+  FindingNoteActionItem,
+  FindingTriageStatusBadge,
+  FindingTriageStatusCell,
+} from "../finding-triage-cells";
 import { DeltaValues, NotificationIndicator } from "../notification-indicator";
+
+import { LighthouseSkillsBlock } from "./lighthouse-skills-block";
+import { LighthouseSkillsRail } from "./lighthouse-skills-rail";
 import { ResourceDetailSkeleton } from "./resource-detail-skeleton";
 import type { CheckMeta } from "./use-resource-detail-drawer";
+import { useSkillLauncherVariant } from "./use-skill-launcher-variant";
+
+const OTHER_FINDINGS_ACTION_CELL_CLASS =
+  "sticky right-0 z-20 min-w-12 last:rounded-r-none! overflow-visible bg-bg-neutral-secondary before:pointer-events-none before:absolute before:inset-y-0 before:-left-8 before:w-8 before:bg-gradient-to-r before:from-transparent before:to-bg-neutral-secondary before:content-[''] group-hover:bg-bg-neutral-tertiary group-hover:before:to-bg-neutral-tertiary";
 
 /** Strip markdown code fences (```lang ... ```) so CodeSnippet shows clean code. */
 function stripCodeFences(code: string): string {
@@ -85,6 +118,10 @@ function stripCodeFences(code: string): string {
     .replace(/^```\w*\n?/, "")
     .replace(/\n?```\s*$/, "")
     .trim();
+}
+
+function isNonEmptyString(value: string | null | undefined): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function resolveNativeIacConfig(providerType: string | undefined): {
@@ -120,11 +157,13 @@ function renderRemediationCodeBlock({
   value,
   copyValue,
   language = QUERY_EDITOR_LANGUAGE.PLAIN_TEXT,
+  showLineNumbers = true,
 }: {
   label: string;
   value: string;
   copyValue?: string;
   language?: QueryEditorLanguage;
+  showLineNumbers?: boolean;
 }) {
   return (
     <QueryCodeEditor
@@ -135,99 +174,72 @@ function renderRemediationCodeBlock({
       editable={false}
       minHeight={96}
       showCopyButton
+      showLineNumbers={showLineNumbers}
       onChange={() => {}}
     />
   );
 }
 
-function normalizeComplianceFrameworkName(framework: string): string {
-  return framework
-    .trim()
-    .toLowerCase()
-    .replace(/[\s_]+/g, "-")
-    .replace(/-+/g, "-");
+/** Frameworks are not uniquely named — eight AWS ones are called "CIS" — so the
+ *  version is part of the label, not decoration. */
+function complianceFrameworkLabel(
+  framework: FindingComplianceFramework,
+): string {
+  const name = framework.framework || framework.name;
+  return framework.version ? `${name} ${framework.version}` : name;
 }
 
-function stripComplianceVersionSuffix(framework: string): string {
-  return framework.replace(/-\d+(?:\.\d+)*$/g, "");
+interface ComplianceFrameworkChipProps {
+  framework: FindingComplianceFramework;
+  isNavigable: boolean;
+  onOpen: (framework: FindingComplianceFramework) => void;
 }
 
-function canonicalComplianceKey(framework: string): string {
-  return stripComplianceVersionSuffix(
-    normalizeComplianceFrameworkName(framework),
-  )
-    .replace(/[^a-z0-9]+/g, "")
-    .trim();
-}
-
-function complianceTokens(framework: string): string[] {
-  return stripComplianceVersionSuffix(
-    normalizeComplianceFrameworkName(framework),
-  )
-    .split("-")
-    .map((token) => token.trim())
-    .filter(Boolean)
-    .filter((token) => !/^\d+(?:\.\d+)*$/.test(token));
-}
-
-function complianceMatchScore(
-  sourceFramework: string,
-  targetFramework: string,
-): number {
-  const normalizedSource = normalizeComplianceFrameworkName(sourceFramework);
-  const normalizedTarget = normalizeComplianceFrameworkName(targetFramework);
-
-  if (normalizedSource === normalizedTarget) {
-    return 5;
-  }
-
-  const canonicalSource = canonicalComplianceKey(sourceFramework);
-  const canonicalTarget = canonicalComplianceKey(targetFramework);
-
-  if (canonicalSource === canonicalTarget) {
-    return 4;
-  }
-
-  if (canonicalSource && canonicalTarget) {
-    const sourceTokens = canonicalSource.split("-");
-    const targetTokens = canonicalTarget.split("-");
-    if (
-      sourceTokens.length !== targetTokens.length &&
-      (sourceTokens.every((t) => targetTokens.includes(t)) ||
-        targetTokens.every((t) => sourceTokens.includes(t)))
-    ) {
-      return 3;
-    }
-  }
-
-  const sourceTokens = complianceTokens(sourceFramework);
-  const targetTokens = complianceTokens(targetFramework);
-  if (!sourceTokens.length || !targetTokens.length) {
-    return 0;
-  }
-
-  const sourceMatchesTarget = sourceTokens.every((token) =>
-    targetTokens.includes(token),
-  );
-  const targetMatchesSource = targetTokens.every((token) =>
-    sourceTokens.includes(token),
+function ComplianceFrameworkChip({
+  framework,
+  isNavigable,
+  onOpen,
+}: ComplianceFrameworkChipProps) {
+  const icon = getComplianceIcon(framework.complianceId);
+  const label = complianceFrameworkLabel(framework);
+  const content = icon ? (
+    <span className="border-border-neutral-tertiary flex size-7 shrink-0 items-center justify-center rounded-md border bg-slate-50">
+      <Image
+        src={icon}
+        alt={label}
+        width={20}
+        height={20}
+        className="size-5 object-contain"
+      />
+    </span>
+  ) : (
+    label
   );
 
-  if (sourceMatchesTarget || targetMatchesSource) {
-    return 2;
-  }
-
-  if (
-    sourceTokens.some((token) => targetTokens.includes(token)) &&
-    canonicalSource &&
-    canonicalTarget &&
-    (canonicalTarget.includes(canonicalSource) ||
-      canonicalSource.includes(canonicalTarget))
-  ) {
-    return 1;
-  }
-
-  return 0;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        {isNavigable ? (
+          <Button
+            type="button"
+            variant={icon ? "bare" : "outline"}
+            size={icon ? "icon-xs" : "sm"}
+            aria-label={`Open ${label} compliance details`}
+            onClick={() => onOpen(framework)}
+          >
+            {content}
+          </Button>
+        ) : icon ? (
+          content
+        ) : (
+          <Badge variant="tag" size="sm" aria-label={label}>
+            {content}
+          </Badge>
+        )}
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  );
 }
 
 function parseSelectedScanIds(scanFilterValue: string | null): string[] {
@@ -239,37 +251,6 @@ function parseSelectedScanIds(scanFilterValue: string | null): string[] {
     .split(",")
     .map((scanId) => scanId.trim())
     .filter(Boolean);
-}
-
-function resolveComplianceMatch(
-  compliances: ComplianceOverviewData[] | undefined,
-  framework: string,
-): {
-  complianceId: string;
-  framework: string;
-  version: string;
-} | null {
-  if (!compliances?.length) {
-    return null;
-  }
-
-  const match = compliances
-    .map((compliance) => ({
-      compliance,
-      score: complianceMatchScore(framework, compliance.attributes.framework),
-    }))
-    .filter(({ score }) => score > 0)
-    .sort((a, b) => b.score - a.score)[0]?.compliance;
-
-  if (!match) {
-    return null;
-  }
-
-  return {
-    complianceId: match.id,
-    framework: match.attributes.framework,
-    version: match.attributes.version,
-  };
 }
 
 function buildComplianceDetailHref({
@@ -318,6 +299,7 @@ interface ResourceDetailDrawerContentProps {
   onNavigatePrev: () => void;
   onNavigateNext: () => void;
   onMuteComplete: () => void;
+  onTriageUpdate?: (input: UpdateFindingTriageInput) => void;
 }
 
 export function ResourceDetailDrawerContent({
@@ -333,40 +315,55 @@ export function ResourceDetailDrawerContent({
   onNavigatePrev,
   onNavigateNext,
   onMuteComplete,
+  onTriageUpdate,
 }: ResourceDetailDrawerContentProps) {
   const searchParams = useSearchParams();
+  const openSidePanel = useSidePanelStore((state) => state.openPanel);
+  const lighthouseContext = useLighthouseCurrentContext();
+  // A/B experiment: PostHog decides between the footer card (control) and
+  // the header chip rail. Falls back to the card until the flag resolves.
+  const isDropdownLauncher =
+    useSkillLauncherVariant() === SKILL_LAUNCHER_VARIANT.DROPDOWN;
   const [isMuteModalOpen, setIsMuteModalOpen] = useState(false);
-  const [isJiraModalOpen, setIsJiraModalOpen] = useState(false);
-  const [resolvingFramework, setResolvingFramework] = useState<string | null>(
-    null,
-  );
   const [optimisticallyMutedIds, setOptimisticallyMutedIds] = useState<
     Set<string>
   >(new Set());
 
-  // Initial load — no check metadata yet
+  // Initial load — no check metadata yet. Mirrors the loaded layout 1:1:
+  // header (badges, title, compliance chips), navigation row, and the
+  // resource card with metadata grid, tabs bar and overview blocks.
   if (!checkMeta && isLoading) {
     return (
       <div className="flex h-full min-w-0 flex-col gap-4 overflow-hidden">
-        {/* Header skeleton */}
-        <div className="flex flex-col gap-2">
+        {/* Header skeleton — status/severity badges, title, compliance chips */}
+        <div className="flex flex-col gap-2" aria-hidden="true">
           <div className="flex items-center gap-3">
             <Skeleton className="h-6 w-14 rounded-md" />
             <Skeleton className="h-6 w-16 rounded-md" />
           </div>
           <Skeleton className="h-6 w-3/4 rounded" />
+          <div className="flex flex-col gap-1.5">
+            <Skeleton className="h-4 w-28 rounded" />
+            <div className="flex flex-wrap items-center gap-2">
+              <Skeleton className="size-7 rounded-md" />
+              <Skeleton className="size-7 rounded-md" />
+              <Skeleton className="size-7 rounded-md" />
+            </div>
+          </div>
         </div>
-        {/* Navigation skeleton */}
-        <div className="flex items-center justify-between">
-          <Skeleton className="h-7 w-48 rounded" />
+        {/* Navigation skeleton — "Resource X of N" tag + carousel chevrons */}
+        <div className="flex items-center justify-between" aria-hidden="true">
+          <Skeleton className="h-7 w-32 rounded" />
           <div className="flex gap-1">
             <Skeleton className="size-8 rounded-md" />
             <Skeleton className="size-8 rounded-md" />
           </div>
         </div>
         {/* Resource card skeleton */}
-        <div className="border-border-neutral-secondary bg-bg-neutral-secondary flex min-h-0 flex-1 flex-col gap-4 rounded-lg border p-4">
+        <div className="border-border-neutral-secondary bg-bg-neutral-secondary flex min-h-0 flex-1 flex-col gap-4 overflow-hidden rounded-lg border p-4">
           <ResourceDetailSkeleton />
+          <TabsBarSkeleton />
+          <OverviewNavigationSkeleton />
         </div>
       </div>
     );
@@ -386,6 +383,11 @@ export function ResourceDetailDrawerContent({
   // During carousel navigation we only trust row-backed data until the next
   // finding payload is fully ready, otherwise stale details flash briefly.
   const f = isNavigating ? null : currentFinding;
+  const jiraPayload = createJiraDispatchPayload({
+    targetIds: f ? [f.id] : [],
+    targetType: JIRA_DISPATCH_TARGET.FINDING_ID,
+    findingTitle: checkMeta.checkTitle,
+  });
   const isCheckMetaFresh =
     !currentResource?.checkId || currentResource.checkId === checkMeta.checkId;
   const showCheckMetaContent = !isNavigating || isCheckMetaFresh;
@@ -402,8 +404,7 @@ export function ResourceDetailDrawerContent({
   const resourceUid = currentResource?.resourceUid ?? f?.resourceUid;
   const resourceService = currentResource?.service ?? f?.resourceService;
   const resourceRegion = currentResource?.region ?? f?.resourceRegion;
-  const resourceGroup = currentResource?.resourceGroup ?? f?.resourceGroup;
-  const resourceType = currentResource?.resourceType ?? f?.resourceType;
+  const findingTriage = f?.triage ?? currentResource?.triage;
   const resourceRegionLabel = resourceRegion || "-";
   const firstSeenAt = currentResource?.firstSeenAt ?? f?.firstSeenAt ?? null;
   const lastSeenAt = currentResource?.lastSeenAt ?? f?.updatedAt ?? null;
@@ -421,49 +422,91 @@ export function ResourceDetailDrawerContent({
   const regionFilter = searchParams.get("filter[region__in]");
   const nativeIacConfig = resolveNativeIacConfig(providerType);
   const showOverviewCheckMetaContent = showCheckMetaContent;
-  const showOverviewFindingContent = Boolean(f);
   const resourceDetailHref = f?.resourceId
     ? buildResourceDetailHref(f.resourceId)
     : null;
-  const overviewStatusExtended = f?.statusExtended;
+  const externalResourceTarget = resolveExternalTarget({
+    providerType,
+    resourceUid,
+    providerUid,
+    resourceName,
+    findingUid: f?.uid,
+    region: resourceRegion,
+  });
+  const findingRecommendationUrl = f?.remediation.recommendation.url;
+  const checkRecommendationUrl = checkMeta.remediation.recommendation.url;
+  const recommendationUrl = isNonEmptyString(findingRecommendationUrl)
+    ? findingRecommendationUrl
+    : isNonEmptyString(checkRecommendationUrl)
+      ? checkRecommendationUrl
+      : null;
+  const recommendationLink = recommendationUrl
+    ? {
+        href: recommendationUrl,
+        label: getRecommendationLinkLabel(recommendationUrl),
+      }
+    : null;
+  const overviewStatusExtended =
+    currentResource?.statusExtended || f?.statusExtended;
   const showOverviewStatusExtended = Boolean(overviewStatusExtended);
 
-  const handleOpenCompliance = async (framework: string) => {
-    if (!complianceScanId || resolvingFramework) {
+  const handleDrawerTriageUpdate = async (input: UpdateFindingTriageInput) => {
+    const result = await updateFindingTriage(input);
+    if (shouldRefreshAfterTriageUpdate(input)) {
+      onMuteComplete();
+      return result;
+    }
+
+    onTriageUpdate?.(input);
+    return result;
+  };
+
+  // Navigation only: the panel picks up the focused finding as context on its
+  // own, so no conversation is started on the user's behalf.
+  const handleOpenLighthouseChat = () => {
+    openSidePanel(SIDE_PANEL_TAB.AI_CHAT);
+  };
+
+  const handleLaunchSkill = (skill: LighthouseSkillDefinition) => {
+    openSidePanel(SIDE_PANEL_TAB.AI_CHAT);
+    requestPanelSkillLaunch(skill, lighthouseContext.context);
+  };
+
+  // TODO(experiment): capture launch origin + skill id via cloud's
+  // trackEvent/ANALYTICS_EVENTS once the flag readout event lands.
+  const handleSubmitPrompt = (text: string) => {
+    openSidePanel(SIDE_PANEL_TAB.AI_CHAT);
+    requestPanelChatMessage(text, lighthouseContext.context);
+  };
+
+  /**
+   * The API hands us the framework's `complianceId`, which is the same string
+   * the per-scan detail page keys on — universal frameworks included, since
+   * their id is the SDK's file stem and the provider template carries it
+   * verbatim. So the destination is known up front: no lookup against the
+   * scan's overview, no matching by display name, and `window.open` stays
+   * inside the click gesture instead of running after an `await`, where a
+   * pop-up blocker would eat it.
+   */
+  const handleOpenCompliance = (framework: FindingComplianceFramework) => {
+    if (!complianceScanId) {
       return;
     }
 
-    setResolvingFramework(framework);
-
-    try {
-      const compliancesOverview = await getCompliancesOverview({
+    window.open(
+      buildComplianceDetailHref({
+        complianceId: framework.complianceId,
+        // Same fallback the chip's label uses: `framework` is empty for one the
+        // SDK exposes no metadata for, and it is a path segment here, so
+        // without it the destination collapses to `/compliance/`.
+        framework: framework.framework || framework.name,
+        version: framework.version,
         scanId: complianceScanId,
-      });
-      const complianceMatch = resolveComplianceMatch(
-        compliancesOverview?.data,
-        framework,
-      );
-
-      if (!complianceMatch) {
-        return;
-      }
-
-      window.open(
-        buildComplianceDetailHref({
-          complianceId: complianceMatch.complianceId,
-          framework: complianceMatch.framework,
-          version: complianceMatch.version,
-          scanId: complianceScanId,
-          regionFilter,
-        }),
-        "_blank",
-        "noopener,noreferrer",
-      );
-    } catch (error) {
-      console.error("Error resolving compliance detail:", error);
-    } finally {
-      setResolvingFramework(null);
-    }
+        regionFilter,
+      }),
+      "_blank",
+      "noopener,noreferrer",
+    );
   };
 
   return (
@@ -480,15 +523,6 @@ export function ResourceDetailDrawerContent({
           }}
         />
       )}
-      {f && (
-        <SendToJiraModal
-          isOpen={isJiraModalOpen}
-          onOpenChange={setIsJiraModalOpen}
-          findingId={f.id}
-          findingTitle={checkMeta.checkTitle}
-        />
-      )}
-
       {/* Header: keep row-backed badges visible; only hide stale check metadata */}
       <div className="flex flex-col gap-2">
         <div className="flex flex-wrap items-center gap-3">
@@ -507,6 +541,7 @@ export function ResourceDetailDrawerContent({
           {findingIsMuted !== undefined && (
             <Muted isMuted={findingIsMuted} mutedReason={findingMutedReason} />
           )}
+          {findingTriage && <FindingTriageStatusBadge triage={findingTriage} />}
         </div>
 
         {showCheckMetaContent ? (
@@ -521,81 +556,14 @@ export function ResourceDetailDrawerContent({
                   Compliance Frameworks:
                 </span>
                 <div className="flex flex-wrap items-center gap-2">
-                  {checkMeta.complianceFrameworks.map((framework) => {
-                    const icon = getComplianceIcon(framework);
-                    const isNavigable = Boolean(complianceScanId);
-                    const isResolving = resolvingFramework === framework;
-
-                    return icon ? (
-                      <Tooltip key={framework}>
-                        <TooltipTrigger asChild>
-                          {isNavigable ? (
-                            <button
-                              type="button"
-                              aria-label={`Open ${framework} compliance details`}
-                              onClick={() =>
-                                void handleOpenCompliance(framework)
-                              }
-                              disabled={Boolean(resolvingFramework)}
-                              className="flex size-7 shrink-0 items-center justify-center rounded-md border border-gray-300 bg-white p-0.5 transition-shadow hover:shadow-sm focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none disabled:cursor-wait disabled:opacity-70"
-                            >
-                              <Image
-                                src={icon}
-                                alt={framework}
-                                width={20}
-                                height={20}
-                                className="size-5 object-contain"
-                              />
-                              {isResolving && (
-                                <span className="sr-only">
-                                  Opening compliance
-                                </span>
-                              )}
-                            </button>
-                          ) : (
-                            <div className="flex size-7 shrink-0 items-center justify-center rounded-md border border-gray-300 bg-white p-0.5">
-                              <Image
-                                src={icon}
-                                alt={framework}
-                                width={20}
-                                height={20}
-                                className="size-5 object-contain"
-                              />
-                            </div>
-                          )}
-                        </TooltipTrigger>
-                        <TooltipContent>{framework}</TooltipContent>
-                      </Tooltip>
-                    ) : (
-                      <Tooltip key={framework}>
-                        <TooltipTrigger asChild>
-                          {isNavigable ? (
-                            <button
-                              type="button"
-                              aria-label={`Open ${framework} compliance details`}
-                              onClick={() =>
-                                void handleOpenCompliance(framework)
-                              }
-                              disabled={Boolean(resolvingFramework)}
-                              className="text-text-neutral-secondary inline-flex h-7 shrink-0 items-center rounded-md border border-gray-300 bg-white px-1.5 text-xs transition-shadow hover:shadow-sm focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none disabled:cursor-wait disabled:opacity-70"
-                            >
-                              {framework}
-                              {isResolving && (
-                                <span className="sr-only">
-                                  Opening compliance
-                                </span>
-                              )}
-                            </button>
-                          ) : (
-                            <span className="text-text-neutral-secondary inline-flex h-7 shrink-0 items-center rounded-md border border-gray-300 bg-white px-1.5 text-xs">
-                              {framework}
-                            </span>
-                          )}
-                        </TooltipTrigger>
-                        <TooltipContent>{framework}</TooltipContent>
-                      </Tooltip>
-                    );
-                  })}
+                  {checkMeta.complianceFrameworks.map((framework) => (
+                    <ComplianceFrameworkChip
+                      key={framework.id}
+                      framework={framework}
+                      isNavigable={Boolean(complianceScanId)}
+                      onOpen={handleOpenCompliance}
+                    />
+                  ))}
                 </div>
               </div>
             )}
@@ -610,11 +578,21 @@ export function ResourceDetailDrawerContent({
             <div className="flex flex-col gap-1.5">
               <Skeleton className="h-4 w-28 rounded" />
               <div className="flex flex-wrap items-center gap-2">
-                <Skeleton className="h-7 w-16 rounded-md" />
-                <Skeleton className="h-7 w-20 rounded-md" />
+                <Skeleton className="size-7 rounded-md" />
+                <Skeleton className="size-7 rounded-md" />
+                <Skeleton className="size-7 rounded-md" />
               </div>
             </div>
           </div>
+        )}
+
+        {/* Skill launcher experiment, "dropdown" variant: chip rail under the
+            title instead of the footer card. */}
+        {isCloud() && !isNavigating && isDropdownLauncher && (
+          <LighthouseSkillsRail
+            onLaunchSkill={handleLaunchSkill}
+            onSubmitPrompt={handleSubmitPrompt}
+          />
         )}
       </div>
 
@@ -657,83 +635,116 @@ export function ResourceDetailDrawerContent({
           <>
             <div className="flex items-start gap-4">
               {/* Resource info grid — 4 data columns */}
-              <div className="grid min-w-0 flex-1 grid-cols-1 gap-4 md:grid-cols-4 md:gap-x-8 md:gap-y-4">
-                {/* Row 1: Account, Resource, Service, Region */}
-                <EntityInfo
-                  cloudProvider={providerType}
-                  nameIcon={<Box className="size-4" />}
-                  entityAlias={providerAlias}
-                  entityId={providerUid}
-                />
-                <EntityInfo
-                  nameIcon={<Container className="size-4" />}
-                  entityAlias={resourceName}
-                  entityId={resourceUid}
-                  idLabel="UID"
-                />
-                <InfoField label="Service" variant="compact">
-                  {resourceService}
-                </InfoField>
-                <InfoField label="Region" variant="compact">
-                  <span className="flex items-center gap-1.5">
-                    {getRegionFlag(resourceRegionLabel) && (
-                      <span className="translate-y-px text-base leading-none">
-                        {getRegionFlag(resourceRegionLabel)}
-                      </span>
-                    )}
-                    {resourceRegionLabel}
-                  </span>
-                </InfoField>
-
-                {/* Row 2: Dates */}
-                <InfoField label="Last detected" variant="compact">
-                  <DateWithTime inline dateTime={lastSeenAt || "-"} />
-                </InfoField>
-                <InfoField label="First seen" variant="compact">
-                  <DateWithTime inline dateTime={firstSeenAt || "-"} />
-                </InfoField>
-                <InfoField label="Failing for" variant="compact">
-                  {getFailingForLabel(firstSeenAt) || "-"}
-                </InfoField>
-                <InfoField label="Group" variant="compact">
-                  {resourceGroup || "-"}
-                </InfoField>
-
-                {/* Row 3: IDs */}
-                <InfoField label="Check ID" variant="compact">
-                  <CodeSnippet
-                    value={currentResource?.checkId ?? checkMeta.checkId}
-                    transparent
-                    className="max-w-full text-sm"
-                  />
-                </InfoField>
-                <InfoField label="Finding ID" variant="compact">
-                  {currentResource?.findingId || f?.id ? (
-                    <CodeSnippet
-                      value={currentResource?.findingId ?? f?.id ?? "-"}
-                      transparent
-                      className="max-w-full text-sm"
+              <div
+                data-responsive-container
+                className="@container flex min-w-0 flex-1 flex-col gap-4"
+              >
+                {/* Row 1: Provider, Resource, Service, Region */}
+                <div
+                  className="grid min-w-0 grid-cols-2 gap-4 @md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.55fr)_minmax(0,0.7fr)] @md:gap-x-8"
+                  data-testid="resource-detail-primary-metadata-row"
+                >
+                  <div className="col-span-2 flex min-w-0 flex-col gap-1 @md:col-span-1">
+                    <span className="text-text-neutral-secondary text-[10px] whitespace-nowrap">
+                      Provider
+                    </span>
+                    <EntityInfo
+                      cloudProvider={providerType}
+                      nameIcon={<Box className="size-4" />}
+                      entityAlias={providerAlias}
+                      entityId={providerUid}
                     />
-                  ) : (
-                    <Skeleton className="h-5 w-28 rounded" />
-                  )}
-                </InfoField>
-                <InfoField label="Finding UID" variant="compact">
-                  {f?.uid ? (
-                    <CodeSnippet
-                      value={f.uid}
-                      transparent
-                      className="max-w-full text-sm"
+                  </div>
+                  <div className="col-span-2 flex min-w-0 flex-col gap-1 @md:col-span-1">
+                    <span className="text-text-neutral-secondary text-[10px] whitespace-nowrap">
+                      Resource
+                    </span>
+                    <EntityInfo
+                      nameIcon={<Container className="size-4" />}
+                      entityAlias={resourceName}
+                      entityId={resourceUid}
+                      idLabel="UID"
+                      nameAction={
+                        resourceDetailHref ? (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button variant="link" size="link-sm" asChild>
+                                <Link
+                                  href={resourceDetailHref}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  prefetch={false}
+                                >
+                                  <span className="sr-only">View Resource</span>
+                                  <ExternalLink
+                                    className="size-3"
+                                    aria-hidden="true"
+                                  />
+                                </Link>
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="top">
+                              View Resource
+                            </TooltipContent>
+                          </Tooltip>
+                        ) : undefined
+                      }
                     />
-                  ) : (
-                    <Skeleton className="h-5 w-36 rounded" />
-                  )}
-                </InfoField>
+                  </div>
+                  <InfoField
+                    label="Service"
+                    variant="compact"
+                    className="min-w-0"
+                  >
+                    <span className="block truncate whitespace-nowrap">
+                      {resourceService}
+                    </span>
+                  </InfoField>
+                  <InfoField
+                    label="Region"
+                    variant="compact"
+                    className="min-w-0"
+                  >
+                    <span className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
+                      {getRegionFlag(resourceRegionLabel) && (
+                        <span className="shrink-0 translate-y-px text-base leading-none">
+                          {getRegionFlag(resourceRegionLabel)}
+                        </span>
+                      )}
+                      <span className="truncate">{resourceRegionLabel}</span>
+                    </span>
+                  </InfoField>
+                </div>
 
-                {/* Row 4: Resource metadata */}
-                <InfoField label="Resource type" variant="compact">
-                  {resourceType || "-"}
-                </InfoField>
+                {/* Row 2: Last detected, First seen, Failing for */}
+                <div
+                  className="grid min-w-0 grid-cols-2 gap-4 @md:grid-cols-3 @md:gap-x-8"
+                  data-testid="resource-detail-secondary-metadata-row"
+                >
+                  <InfoField
+                    label="Last detected"
+                    variant="compact"
+                    className="min-w-0"
+                  >
+                    <DateWithTime inline dateTime={lastSeenAt || "-"} />
+                  </InfoField>
+                  <InfoField
+                    label="First seen"
+                    variant="compact"
+                    className="min-w-0"
+                  >
+                    <DateWithTime inline dateTime={firstSeenAt || "-"} />
+                  </InfoField>
+                  <InfoField
+                    label="Failing for"
+                    variant="compact"
+                    className="min-w-0"
+                  >
+                    <span className="block truncate whitespace-nowrap">
+                      {getFailingForLabel(firstSeenAt) || "-"}
+                    </span>
+                  </InfoField>
+                </div>
               </div>
 
               {/* Actions button — fixed size, aligned with row 1 */}
@@ -743,6 +754,20 @@ export function ResourceDetailDrawerContent({
                     variant="bordered"
                     ariaLabel="Resource actions"
                   >
+                    {findingTriage && (
+                      <FindingNoteActionItem
+                        triage={findingTriage}
+                        findingContext={{
+                          title: checkMeta.checkTitle,
+                          resource: resourceName,
+                          provider: providerAlias,
+                          providerType,
+                        }}
+                        onTriageUpdateAction={handleDrawerTriageUpdate}
+                        onTriageNoteLoadAction={loadLatestFindingTriageNote}
+                        onTriageDetailLoadAction={loadFindingTriageDetail}
+                      />
+                    )}
                     <ActionDropdownItem
                       icon={
                         f.isMuted ? (
@@ -755,11 +780,23 @@ export function ResourceDetailDrawerContent({
                       disabled={f.isMuted}
                       onSelect={() => setIsMuteModalOpen(true)}
                     />
-                    <ActionDropdownItem
-                      icon={<JiraIcon size={20} />}
-                      label="Send to Jira"
-                      onSelect={() => setIsJiraModalOpen(true)}
+                    <JiraDispatchActionItem
+                      label={buildJiraActionLabel({ findingCount: 1 })}
+                      payload={jiraPayload}
                     />
+                    {externalResourceTarget && (
+                      <ActionDropdownItem
+                        icon={<ExternalLink className="size-5" />}
+                        label={externalResourceTarget.label}
+                        onSelect={() =>
+                          window.open(
+                            externalResourceTarget.url,
+                            "_blank",
+                            "noopener,noreferrer",
+                          )
+                        }
+                      />
+                    )}
                   </ActionDropdown>
                 ) : (
                   <Skeleton className="size-8 rounded-md" />
@@ -767,19 +804,28 @@ export function ResourceDetailDrawerContent({
               </div>
             </div>
 
-            {resourceDetailHref && (
-              <div className="border-border-neutral-secondary flex justify-end border-t pt-3">
-                <Button variant="link" size="link-sm" asChild>
-                  <Link
-                    href={resourceDetailHref}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    View Resource
-                    <ExternalLink className="size-3" />
-                  </Link>
-                </Button>
-              </div>
+            {/* Status Extended — context below the resource */}
+            {showOverviewStatusExtended && (
+              <Card
+                variant={
+                  findingStatus === "PASS"
+                    ? "success"
+                    : findingStatus === "MANUAL"
+                      ? "warning"
+                      : "danger"
+                }
+                className={
+                  findingStatus === "MUTED"
+                    ? "border-border-neutral-tertiary bg-bg-neutral-tertiary"
+                    : findingStatus === "MANUAL"
+                      ? "bg-orange-100 dark:bg-[color-mix(in_oklch,var(--bg-warning-secondary)_90%,white)]"
+                      : undefined
+                }
+              >
+                <p className="text-text-neutral-primary text-sm leading-relaxed break-words">
+                  {overviewStatusExtended}
+                </p>
+              </Card>
             )}
           </>
         )}
@@ -791,143 +837,57 @@ export function ResourceDetailDrawerContent({
         >
           <div className="mb-4 flex items-center justify-between">
             <TabsList>
-              <TabsTrigger value="overview">Finding Overview</TabsTrigger>
-              <TabsTrigger value="other-findings">
-                Other Findings For This Resource
+              <TabsTrigger value="overview" tooltip="Overview">
+                Overview
               </TabsTrigger>
-              <TabsTrigger value="scans">Scans</TabsTrigger>
-              <TabsTrigger value="events">Events</TabsTrigger>
+              <TabsTrigger value="remediation" tooltip="Remediation">
+                Remediation
+              </TabsTrigger>
+              <TabsTrigger value="metadata" tooltip="Resource Metadata">
+                Evidence
+              </TabsTrigger>
+              <TabsTrigger
+                value="other-findings"
+                tooltip="Other Findings for this resource"
+              >
+                Other findings
+              </TabsTrigger>
+              <TabsTrigger value="scans" tooltip="Scans">
+                Scans
+              </TabsTrigger>
+              <TabsTrigger value="events" tooltip="Events">
+                Events
+              </TabsTrigger>
             </TabsList>
           </div>
 
-          {/* Finding Overview — check-level data from checkMeta (always stable) */}
+          {/* Overview — check-level data from checkMeta (always stable) */}
           <TabsContent
             value="overview"
             className="minimal-scrollbar flex flex-col gap-4 overflow-y-auto"
           >
             {showOverviewCheckMetaContent ? (
               <>
-                {/* Card 1: Risk + Description + Status Extended */}
-                {(checkMeta.risk ||
-                  checkMeta.description ||
-                  showOverviewFindingContent) && (
-                  <Card variant="inner">
-                    {checkMeta.risk && (
-                      <Card variant="danger">
-                        <span className="text-text-neutral-secondary text-sm font-semibold">
-                          Risk:
-                        </span>
-                        <MarkdownContainer>{checkMeta.risk}</MarkdownContainer>
-                      </Card>
-                    )}
-                    {checkMeta.description && (
-                      <div
-                        className={cn(
-                          "flex flex-col gap-1",
-                          showOverviewStatusExtended &&
-                            "border-default-200 border-b pb-4",
-                        )}
-                      >
-                        <span className="text-text-neutral-secondary text-sm font-semibold">
-                          Description:
-                        </span>
-                        <MarkdownContainer>
-                          {checkMeta.description}
-                        </MarkdownContainer>
-                      </div>
-                    )}
-                    {showOverviewFindingContent &&
-                      showOverviewStatusExtended && (
-                        <div className="flex flex-col gap-1">
-                          <span className="text-text-neutral-secondary text-sm font-semibold">
-                            Status Extended:
-                          </span>
-                          <p className="text-text-neutral-primary text-sm">
-                            {overviewStatusExtended}
-                          </p>
-                        </div>
-                      )}
-                  </Card>
+                {/* Risk */}
+                {checkMeta.risk && (
+                  <div className="border-border-neutral-primary flex flex-col gap-1 border-l-4 pl-3">
+                    <span className="text-text-neutral-primary text-sm font-semibold">
+                      Risk:
+                    </span>
+                    <MarkdownContainer>{checkMeta.risk}</MarkdownContainer>
+                  </div>
                 )}
 
-                {/* Card 2: Remediation + Commands */}
-                {(checkMeta.remediation.recommendation.text ||
-                  checkMeta.remediation.code.cli ||
-                  checkMeta.remediation.code.terraform ||
-                  checkMeta.remediation.code.nativeiac) && (
-                  <Card variant="inner">
-                    {checkMeta.remediation.recommendation.text && (
-                      <div className="flex flex-col gap-1">
-                        <span className="text-text-neutral-secondary text-xs">
-                          Remediation:
-                        </span>
-                        <div className="flex items-start gap-3">
-                          <div className="text-text-neutral-primary flex-1 text-sm">
-                            <MarkdownContainer>
-                              {checkMeta.remediation.recommendation.text}
-                            </MarkdownContainer>
-                          </div>
-                          {checkMeta.remediation.recommendation.url && (
-                            <CustomLink
-                              href={checkMeta.remediation.recommendation.url}
-                              size="sm"
-                              className="shrink-0"
-                            >
-                              View in Prowler Hub
-                            </CustomLink>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {checkMeta.remediation.code.cli && (
-                      <div className="flex flex-col gap-1">
-                        {renderRemediationCodeBlock({
-                          label: "CLI Command",
-                          language: QUERY_EDITOR_LANGUAGE.SHELL,
-                          value: `$ ${stripCodeFences(checkMeta.remediation.code.cli)}`,
-                          copyValue: stripCodeFences(
-                            checkMeta.remediation.code.cli,
-                          ),
-                        })}
-                      </div>
-                    )}
-
-                    {checkMeta.remediation.code.terraform && (
-                      <div className="flex flex-col gap-1">
-                        {renderRemediationCodeBlock({
-                          label: "Terraform",
-                          language: QUERY_EDITOR_LANGUAGE.HCL,
-                          value: stripCodeFences(
-                            checkMeta.remediation.code.terraform,
-                          ),
-                        })}
-                      </div>
-                    )}
-
-                    {checkMeta.remediation.code.nativeiac && providerType && (
-                      <div className="flex flex-col gap-1">
-                        {renderRemediationCodeBlock({
-                          label: nativeIacConfig.label,
-                          language: nativeIacConfig.language,
-                          value: stripCodeFences(
-                            checkMeta.remediation.code.nativeiac,
-                          ),
-                        })}
-                      </div>
-                    )}
-
-                    {checkMeta.remediation.code.other && (
-                      <div className="flex flex-col gap-1">
-                        <span className="text-text-neutral-secondary text-xs">
-                          Remediation Steps:
-                        </span>
-                        <MarkdownContainer>
-                          {checkMeta.remediation.code.other}
-                        </MarkdownContainer>
-                      </div>
-                    )}
-                  </Card>
+                {/* Description */}
+                {checkMeta.description && (
+                  <div className="flex flex-col gap-1 px-1">
+                    <span className="text-text-neutral-primary text-sm font-semibold">
+                      Description:
+                    </span>
+                    <MarkdownContainer>
+                      {checkMeta.description}
+                    </MarkdownContainer>
+                  </div>
                 )}
 
                 {checkMeta.additionalUrls.length > 0 && (
@@ -936,19 +896,26 @@ export function ResourceDetailDrawerContent({
                       <span className="text-text-neutral-secondary text-xs">
                         References:
                       </span>
-                      <ul className="list-inside list-disc space-y-1">
-                        {checkMeta.additionalUrls.map((link, idx) => (
-                          <li key={idx}>
-                            <CustomLink
+                      <div className="flex flex-col items-start gap-1">
+                        {checkMeta.additionalUrls.map((link) => (
+                          <Button
+                            key={link}
+                            variant="link"
+                            size="link-xs"
+                            className="h-auto justify-start p-0 text-left break-all whitespace-normal!"
+                            asChild
+                          >
+                            <Link
                               href={link}
-                              size="sm"
-                              className="break-all whitespace-normal!"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              prefetch={false}
                             >
                               {link}
-                            </CustomLink>
-                          </li>
+                            </Link>
+                          </Button>
                         ))}
-                      </ul>
+                      </div>
                     </div>
                   </Card>
                 )}
@@ -973,13 +940,182 @@ export function ResourceDetailDrawerContent({
                     </div>
                   </Card>
                 )}
+
+                {/* IDs */}
+                <Card variant="inner">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3 md:gap-x-6">
+                    <InfoField label="Check ID" variant="compact">
+                      <CodeSnippet
+                        value={currentResource?.checkId ?? checkMeta.checkId}
+                        transparent
+                        className="max-w-full text-sm"
+                      />
+                    </InfoField>
+                    <InfoField label="Finding ID" variant="compact">
+                      {currentResource?.findingId || f?.id ? (
+                        <CodeSnippet
+                          value={currentResource?.findingId ?? f?.id ?? "-"}
+                          transparent
+                          className="max-w-full text-sm"
+                        />
+                      ) : (
+                        <Skeleton className="h-5 w-28 rounded" />
+                      )}
+                    </InfoField>
+                    <InfoField label="Finding UID" variant="compact">
+                      {f?.uid ? (
+                        <CodeSnippet
+                          value={f.uid}
+                          transparent
+                          className="max-w-full text-sm"
+                        />
+                      ) : (
+                        <Skeleton className="h-5 w-36 rounded" />
+                      )}
+                    </InfoField>
+                  </div>
+                </Card>
               </>
             ) : (
               <OverviewNavigationSkeleton />
             )}
           </TabsContent>
 
-          {/* Other Findings For This Resource */}
+          {/* Remediation */}
+          <TabsContent
+            value="remediation"
+            className="minimal-scrollbar flex flex-col gap-4 overflow-y-auto"
+          >
+            {showOverviewCheckMetaContent ? (
+              checkMeta.remediation.recommendation.text ||
+              recommendationLink ||
+              checkMeta.remediation.code.cli ||
+              checkMeta.remediation.code.terraform ||
+              checkMeta.remediation.code.nativeiac ||
+              checkMeta.remediation.code.other ? (
+                <>
+                  {(checkMeta.remediation.recommendation.text ||
+                    recommendationLink) && (
+                    <div className="flex flex-col gap-1 px-1">
+                      <div
+                        className="flex min-w-0 items-center justify-between gap-3"
+                        data-testid="remediation-heading-row"
+                      >
+                        <span className="text-text-neutral-primary text-sm font-semibold">
+                          Remediation:
+                        </span>
+                        {recommendationLink && (
+                          <Button
+                            variant="link"
+                            size="link-xs"
+                            className="shrink-0 whitespace-nowrap"
+                            asChild
+                          >
+                            <Link
+                              href={recommendationLink.href}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              prefetch={false}
+                            >
+                              {recommendationLink.label}
+                            </Link>
+                          </Button>
+                        )}
+                      </div>
+                      <div>
+                        {checkMeta.remediation.recommendation.text && (
+                          <div className="text-text-neutral-primary text-sm">
+                            <MarkdownContainer>
+                              {checkMeta.remediation.recommendation.text}
+                            </MarkdownContainer>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {(checkMeta.remediation.code.cli ||
+                    checkMeta.remediation.code.terraform ||
+                    checkMeta.remediation.code.nativeiac ||
+                    checkMeta.remediation.code.other) && (
+                    <Card variant="inner">
+                      {checkMeta.remediation.code.cli && (
+                        <div className="flex flex-col gap-1">
+                          {renderRemediationCodeBlock({
+                            label: "CLI Command",
+                            language: QUERY_EDITOR_LANGUAGE.SHELL,
+                            value: `$ ${stripCodeFences(checkMeta.remediation.code.cli)}`,
+                            copyValue: stripCodeFences(
+                              checkMeta.remediation.code.cli,
+                            ),
+                            showLineNumbers: false,
+                          })}
+                        </div>
+                      )}
+
+                      {checkMeta.remediation.code.terraform && (
+                        <div className="flex flex-col gap-1">
+                          {renderRemediationCodeBlock({
+                            label: "Terraform",
+                            language: QUERY_EDITOR_LANGUAGE.HCL,
+                            value: stripCodeFences(
+                              checkMeta.remediation.code.terraform,
+                            ),
+                          })}
+                        </div>
+                      )}
+
+                      {checkMeta.remediation.code.nativeiac && providerType && (
+                        <div className="flex flex-col gap-1">
+                          {renderRemediationCodeBlock({
+                            label: nativeIacConfig.label,
+                            language: nativeIacConfig.language,
+                            value: stripCodeFences(
+                              checkMeta.remediation.code.nativeiac,
+                            ),
+                          })}
+                        </div>
+                      )}
+
+                      {checkMeta.remediation.code.other && (
+                        <div className="flex flex-col gap-1">
+                          <span className="text-text-neutral-secondary text-xs">
+                            Remediation Steps:
+                          </span>
+                          <MarkdownContainer>
+                            {checkMeta.remediation.code.other}
+                          </MarkdownContainer>
+                        </div>
+                      )}
+                    </Card>
+                  )}
+                </>
+              ) : (
+                <p className="text-text-neutral-tertiary text-sm">
+                  No remediation guidance available for this check.
+                </p>
+              )
+            ) : (
+              <RemediationNavigationSkeleton />
+            )}
+          </TabsContent>
+
+          {/* Metadata */}
+          <TabsContent
+            value="metadata"
+            className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden"
+          >
+            {isNavigating ? (
+              <MetadataNavigationSkeleton />
+            ) : (
+              <ResourceMetadataPanel
+                metadata={f?.resourceMetadata}
+                details={f?.resourceDetails}
+              />
+            )}
+          </TabsContent>
+
+          {/* Other findings — findings affecting this same resource */}
           <TabsContent
             value="other-findings"
             className="minimal-scrollbar flex flex-col gap-2 overflow-y-auto"
@@ -1025,6 +1161,11 @@ export function ResourceDetailDrawerContent({
                           Time
                         </span>
                       </TableHead>
+                      <TableHead>
+                        <span className="text-text-neutral-secondary text-sm font-medium">
+                          Triage
+                        </span>
+                      </TableHead>
                       <TableHead className="w-10" />
                     </TableRow>
                   </TableHeader>
@@ -1044,11 +1185,12 @@ export function ResourceDetailDrawerContent({
                               new Set(prev).add(finding.id),
                             )
                           }
+                          onTriageUpdateAction={handleDrawerTriageUpdate}
                         />
                       ))
                     ) : (
                       <TableRow>
-                        <TableCell colSpan={6} className="h-16 text-center">
+                        <TableCell colSpan={7} className="h-16 text-center">
                           <span className="text-text-neutral-tertiary text-sm">
                             {showSyntheticResourceHint
                               ? "No other findings are available for this IaC resource."
@@ -1112,7 +1254,7 @@ export function ResourceDetailDrawerContent({
                       : "-"}
                   </InfoField>
                 </div>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                   <InfoField label="Started At" variant="compact">
                     <DateWithTime inline dateTime={f?.scan?.startedAt || "-"} />
                   </InfoField>
@@ -1122,8 +1264,6 @@ export function ResourceDetailDrawerContent({
                       dateTime={f?.scan?.completedAt || "-"}
                     />
                   </InfoField>
-                </div>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <InfoField label="Launched At" variant="compact">
                     <DateWithTime
                       inline
@@ -1159,40 +1299,84 @@ export function ResourceDetailDrawerContent({
         </Tabs>
       </div>
 
-      {/* Lighthouse AI button */}
-      {!isNavigating && (
-        <a
-          href={`/lighthouse?${new URLSearchParams({ prompt: `Analyze this security finding and provide remediation guidance:\n\n- **Finding**: ${checkMeta.checkTitle}\n- **Check ID**: ${checkMeta.checkId}\n- **Severity**: ${f?.severity ?? "unknown"}\n- **Status**: ${f?.status ?? "unknown"}${f?.statusExtended ? `\n- **Detail**: ${f.statusExtended}` : ""}${checkMeta.risk ? `\n- **Risk**: ${checkMeta.risk}` : ""}` }).toString()}`}
-          className="flex items-center gap-1.5 rounded-lg px-4 py-3 text-sm font-bold text-slate-900 transition-opacity hover:opacity-90"
-          style={{
-            background: "var(--gradient-lighthouse)",
-          }}
-        >
-          <CircleArrowRight className="size-5" />
-          Analyze This Finding With Lighthouse AI
-        </a>
+      {/* Lighthouse AI Skills (design 1d) — the experiment's card control */}
+      {isCloud() && !isNavigating && !isDropdownLauncher && (
+        <LighthouseSkillsBlock
+          onLaunchSkill={handleLaunchSkill}
+          onAskAnything={handleOpenLighthouseChat}
+        />
       )}
     </div>
   );
 }
 
+// Mirrors the loaded Overview tab: risk callout, description and the IDs card.
 function OverviewNavigationSkeleton() {
   return (
     <div
       className="flex flex-col gap-4"
       data-testid="overview-navigation-skeleton"
+      aria-hidden="true"
     >
+      {/* Risk — left-bordered callout */}
+      <div className="border-border-neutral-primary flex flex-col gap-2 border-l-4 pl-3">
+        <Skeleton className="h-4 w-12 rounded" />
+        <Skeleton className="h-4 w-full rounded" />
+        <Skeleton className="h-4 w-5/6 rounded" />
+      </div>
+      {/* Description */}
+      <div className="flex flex-col gap-2 px-1">
+        <Skeleton className="h-4 w-24 rounded" />
+        <Skeleton className="h-4 w-full rounded" />
+        <Skeleton className="h-4 w-2/3 rounded" />
+      </div>
+      {/* Check ID / Finding ID / Finding UID card */}
       <Card variant="inner">
-        <OverviewCardSkeleton lineWidths={["w-24", "w-full", "w-5/6"]} />
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3 md:gap-x-6">
+          {["w-16", "w-20", "w-20"].map((labelWidth, index) => (
+            <div key={index} className="flex flex-col gap-1">
+              <Skeleton className={`h-3.5 ${labelWidth} rounded`} />
+              <Skeleton className="h-5 w-28 rounded" />
+            </div>
+          ))}
+        </div>
       </Card>
+    </div>
+  );
+}
+
+// Mirrors the loaded Remediation tab: heading row with link, text, code card.
+function RemediationNavigationSkeleton() {
+  return (
+    <div
+      className="flex flex-col gap-4"
+      data-testid="remediation-navigation-skeleton"
+      aria-hidden="true"
+    >
+      <div className="flex flex-col gap-2 px-1">
+        <div className="flex items-center justify-between gap-3">
+          <Skeleton className="h-4 w-28 rounded" />
+          <Skeleton className="h-4 w-24 rounded" />
+        </div>
+        <Skeleton className="h-4 w-full rounded" />
+        <Skeleton className="h-4 w-3/4 rounded" />
+      </div>
       <Card variant="inner">
-        <OverviewCardSkeleton
-          lineWidths={["w-28", "w-3/4", "w-full", "w-2/3"]}
-        />
+        <Skeleton className="h-24 w-full rounded" />
       </Card>
-      <Card variant="inner">
-        <OverviewCardSkeleton lineWidths={["w-20", "w-40", "w-24"]} />
-      </Card>
+    </div>
+  );
+}
+
+// Mirrors the tabs bar: six text triggers with their separators' spacing.
+function TabsBarSkeleton() {
+  return (
+    <div className="mt-2 mb-4 flex items-center gap-8" aria-hidden="true">
+      {["w-16", "w-24", "w-16", "w-24", "w-12", "w-12"].map(
+        (tabWidth, index) => (
+          <Skeleton key={index} className={`h-5 ${tabWidth} rounded`} />
+        ),
+      )}
     </div>
   );
 }
@@ -1236,7 +1420,10 @@ function OtherFindingsNavigationSkeletonRows() {
           <TableCell>
             <Skeleton className="h-5 w-20 rounded" />
           </TableCell>
-          <TableCell className="w-10">
+          <TableCell>
+            <Skeleton className="h-8 w-20 rounded-lg" />
+          </TableCell>
+          <TableCell className={OTHER_FINDINGS_ACTION_CELL_CLASS}>
             <Skeleton className="h-5 w-5 rounded" />
           </TableCell>
         </TableRow>
@@ -1262,8 +1449,9 @@ function ScansNavigationSkeleton() {
         labels={["Scan Name", "Resources Scanned", "Progress"]}
       />
       <ScansInfoGridSkeleton labels={["Trigger", "State", "Duration"]} />
-      <ScansInfoGridSkeleton labels={["Started At", "Completed At"]} />
-      <ScansInfoGridSkeleton labels={["Launched At", "Scheduled At"]} />
+      <ScansInfoGridSkeleton
+        labels={["Started At", "Completed At", "Launched At"]}
+      />
     </div>
   );
 }
@@ -1308,18 +1496,41 @@ function EventsNavigationSkeleton() {
   );
 }
 
+function MetadataNavigationSkeleton() {
+  return (
+    <div
+      className="flex flex-col gap-4"
+      data-testid="metadata-navigation-skeleton"
+      aria-hidden="true"
+    >
+      <Card variant="inner">
+        <OverviewCardSkeleton lineWidths={["w-20", "w-full", "w-3/4"]} />
+      </Card>
+      <Skeleton className="h-56 w-full rounded" />
+    </div>
+  );
+}
+
 function OtherFindingRow({
   finding,
   isOptimisticallyMuted,
   onMuted,
+  onTriageUpdateAction,
 }: {
   finding: ResourceDrawerFinding;
   isOptimisticallyMuted: boolean;
   onMuted: () => void;
+  onTriageUpdateAction: (
+    input: UpdateFindingTriageInput,
+  ) => Promise<FindingTriageUpdateResult | void>;
 }) {
   const [isMuteModalOpen, setIsMuteModalOpen] = useState(false);
-  const [isJiraModalOpen, setIsJiraModalOpen] = useState(false);
   const isMuted = finding.isMuted || isOptimisticallyMuted;
+  const jiraPayload = createJiraDispatchPayload({
+    targetIds: [finding.id],
+    targetType: JIRA_DISPATCH_TARGET.FINDING_ID,
+    findingTitle: finding.checkTitle,
+  });
 
   const findingUrl = `/findings?filter%5Bcheck_id__in%5D=${encodeURIComponent(finding.checkId)}&filter%5Bmuted%5D=include`;
 
@@ -1336,14 +1547,8 @@ function OtherFindingRow({
           }}
         />
       )}
-      <SendToJiraModal
-        isOpen={isJiraModalOpen}
-        onOpenChange={setIsJiraModalOpen}
-        findingId={finding.id}
-        findingTitle={finding.checkTitle}
-      />
       <TableRow
-        className="cursor-pointer"
+        className="group cursor-pointer"
         onClick={() => window.open(findingUrl, "_blank", "noopener,noreferrer")}
       >
         <TableCell className="w-14">
@@ -1376,9 +1581,36 @@ function OtherFindingRow({
         <TableCell>
           <DateWithTime dateTime={finding.updatedAt} />
         </TableCell>
-        <TableCell className="w-10">
+        <TableCell>
+          <FindingTriageStatusCell
+            triage={finding.triage}
+            findingContext={{
+              title: finding.checkTitle,
+              resource: finding.resourceName,
+              provider: finding.providerAlias,
+              providerType: finding.providerType,
+            }}
+            onTriageUpdateAction={onTriageUpdateAction}
+            onTriageDetailLoadAction={loadFindingTriageDetail}
+          />
+        </TableCell>
+        <TableCell className={OTHER_FINDINGS_ACTION_CELL_CLASS}>
           <div onClick={(e) => e.stopPropagation()}>
             <ActionDropdown ariaLabel="Finding actions">
+              {finding.triage && (
+                <FindingNoteActionItem
+                  triage={finding.triage}
+                  findingContext={{
+                    title: finding.checkTitle,
+                    resource: finding.resourceName,
+                    provider: finding.providerAlias,
+                    providerType: finding.providerType,
+                  }}
+                  onTriageUpdateAction={onTriageUpdateAction}
+                  onTriageNoteLoadAction={loadLatestFindingTriageNote}
+                  onTriageDetailLoadAction={loadFindingTriageDetail}
+                />
+              )}
               <ActionDropdownItem
                 icon={
                   isMuted ? (
@@ -1391,10 +1623,9 @@ function OtherFindingRow({
                 disabled={isMuted}
                 onSelect={() => setIsMuteModalOpen(true)}
               />
-              <ActionDropdownItem
-                icon={<JiraIcon size={20} />}
-                label="Send to Jira"
-                onSelect={() => setIsJiraModalOpen(true)}
+              <JiraDispatchActionItem
+                label={buildJiraActionLabel({ findingCount: 1 })}
+                payload={jiraPayload}
               />
             </ActionDropdown>
           </div>

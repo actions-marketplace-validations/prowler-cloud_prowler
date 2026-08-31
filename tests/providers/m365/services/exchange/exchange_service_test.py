@@ -26,6 +26,7 @@ def mock_exchange_get_organization_config(_):
         mailtips_external_recipient_enabled=False,
         mailtips_group_metrics_enabled=True,
         mailtips_large_audience_threshold=25,
+        reject_direct_send=True,
     )
 
 
@@ -214,7 +215,60 @@ class Test_Exchange_Service:
             assert organization_config.mailtips_group_metrics_enabled is True
             assert organization_config.mailtips_large_audience_threshold == 25
             assert organization_config.total_paid_licenses == 6000
+            assert organization_config.reject_direct_send is True
 
+            exchange_client.powershell.close()
+
+    @patch(
+        "prowler.providers.m365.lib.powershell.m365_powershell.M365PowerShell.get_organization_config",
+        return_value={
+            "Name": "test-org",
+            "Guid": "org-guid",
+            "RejectDirectSend": True,
+        },
+    )
+    def test_get_organization_config_reject_direct_send(
+        self, _mock_get_organization_config
+    ):
+        with (
+            mock.patch(
+                "prowler.providers.m365.lib.powershell.m365_powershell.M365PowerShell.connect_exchange_online",
+                return_value=True,
+            ),
+        ):
+            exchange_client = Exchange(
+                set_mocked_m365_provider(
+                    identity=M365IdentityInfo(tenant_domain=DOMAIN)
+                )
+            )
+            assert exchange_client.organization_config.reject_direct_send is True
+            exchange_client.powershell.close()
+
+    @patch(
+        "prowler.providers.m365.lib.powershell.m365_powershell.M365PowerShell.get_organization_config",
+        return_value={
+            "Name": "test-org",
+            "Guid": "org-guid",
+            "RejectDirectSend": None,
+        },
+    )
+    def test_get_organization_config_reject_direct_send_null(
+        self, _mock_get_organization_config
+    ):
+        # Null means the setting was never configured; it must keep the
+        # platform default (disabled).
+        with (
+            mock.patch(
+                "prowler.providers.m365.lib.powershell.m365_powershell.M365PowerShell.connect_exchange_online",
+                return_value=True,
+            ),
+        ):
+            exchange_client = Exchange(
+                set_mocked_m365_provider(
+                    identity=M365IdentityInfo(tenant_domain=DOMAIN)
+                )
+            )
+            assert exchange_client.organization_config.reject_direct_send is False
             exchange_client.powershell.close()
 
     @patch(
@@ -300,6 +354,9 @@ class Test_Exchange_Service:
             {
                 "Id": "test",
                 "AdditionalStorageProvidersAvailable": True,
+                "IsDefault": True,
+                "PersonalAccountsEnabled": False,
+                "PersonalAccountCalendarsEnabled": False,
             }
         ],
     )
@@ -319,6 +376,9 @@ class Test_Exchange_Service:
             assert len(mailbox_policies) == 1
             assert mailbox_policies[0].id == "test"
             assert mailbox_policies[0].additional_storage_enabled is True
+            assert mailbox_policies[0].is_default is True
+            assert mailbox_policies[0].personal_accounts_enabled is False
+            assert mailbox_policies[0].personal_account_calendars_enabled is False
             exchange_client.powershell.close()
 
     @patch(
@@ -344,6 +404,41 @@ class Test_Exchange_Service:
             assert len(mailbox_policies) == 1
             assert mailbox_policies[0].id == "test_single"
             assert mailbox_policies[0].additional_storage_enabled is False
+            assert mailbox_policies[0].is_default is False
+            assert mailbox_policies[0].personal_accounts_enabled is True
+            assert mailbox_policies[0].personal_account_calendars_enabled is True
+            exchange_client.powershell.close()
+
+    @patch(
+        "prowler.providers.m365.lib.powershell.m365_powershell.M365PowerShell.get_mailbox_policy",
+        return_value={
+            "Id": "OwaMailboxPolicy-Default",
+            "AdditionalStorageProvidersAvailable": True,
+            "IsDefault": True,
+            "PersonalAccountsEnabled": None,
+            "PersonalAccountCalendarsEnabled": None,
+        },
+    )
+    def test_get_mailbox_policy_null_personal_accounts(self, _mock_get_mailbox_policy):
+        # Tenants where the personal accounts settings were never configured
+        # return null; null must keep the platform default (enabled).
+        with (
+            mock.patch(
+                "prowler.providers.m365.lib.powershell.m365_powershell.M365PowerShell.connect_exchange_online",
+                return_value=True,
+            ),
+        ):
+            exchange_client = Exchange(
+                set_mocked_m365_provider(
+                    identity=M365IdentityInfo(tenant_domain=DOMAIN)
+                )
+            )
+            mailbox_policies = exchange_client.mailbox_policies
+            assert len(mailbox_policies) == 1
+            assert mailbox_policies[0].id == "OwaMailboxPolicy-Default"
+            assert mailbox_policies[0].is_default is True
+            assert mailbox_policies[0].personal_accounts_enabled is True
+            assert mailbox_policies[0].personal_account_calendars_enabled is True
             exchange_client.powershell.close()
 
     @patch(
@@ -493,6 +588,104 @@ class Test_Exchange_Service:
             )
             assert shared_mailboxes[1].identity == "info@contoso.com"
 
+            exchange_client.powershell.close()
+
+    @patch(
+        "prowler.providers.m365.lib.powershell.m365_powershell.M365PowerShell.get_mailboxes",
+        return_value=[
+            {
+                "Identity": "user1@contoso.com",
+                "DisplayName": "User One",
+                "PrimarySmtpAddress": "user1@contoso.com",
+                "RecipientTypeDetails": "UserMailbox",
+            },
+            {
+                "Identity": "room@contoso.com",
+                "DisplayName": "Boardroom",
+                "PrimarySmtpAddress": "room@contoso.com",
+                "RecipientTypeDetails": "RoomMailbox",
+            },
+            {
+                "Identity": "DiscoverySearchMailbox{D919BA05}",
+                "DisplayName": "Discovery Search Mailbox",
+                "PrimarySmtpAddress": "DiscoverySearchMailbox@contoso.onmicrosoft.com",
+                "RecipientTypeDetails": "DiscoveryMailbox",
+            },
+            {
+                "Identity": "SystemMailbox{1f05a927}",
+                "DisplayName": "Microsoft Exchange",
+                "PrimarySmtpAddress": "SystemMailbox@contoso.onmicrosoft.com",
+                "RecipientTypeDetails": "SystemMailbox",
+            },
+        ],
+    )
+    def test_get_mailboxes_excludes_system_types(self, _mock_get_mailboxes):
+        with (
+            mock.patch(
+                "prowler.providers.m365.lib.powershell.m365_powershell.M365PowerShell.connect_exchange_online",
+                return_value=True,
+            ),
+        ):
+            exchange_client = Exchange(
+                set_mocked_m365_provider(
+                    identity=M365IdentityInfo(tenant_domain=DOMAIN)
+                )
+            )
+            mailboxes = exchange_client.mailboxes
+            assert mailboxes is not None
+            assert len(mailboxes) == 2
+            identities = {m.identity for m in mailboxes}
+            assert identities == {"user1@contoso.com", "room@contoso.com"}
+            assert all(
+                m.recipient_type_details not in {"DiscoveryMailbox", "SystemMailbox"}
+                for m in mailboxes
+            )
+            exchange_client.powershell.close()
+
+    @patch(
+        "prowler.providers.m365.lib.powershell.m365_powershell.M365PowerShell.get_mailboxes",
+        return_value={
+            "Identity": "user1@contoso.com",
+            "DisplayName": "User One",
+            "PrimarySmtpAddress": "user1@contoso.com",
+            "RecipientTypeDetails": "UserMailbox",
+        },
+    )
+    def test_get_mailboxes_single_dict(self, _mock_get_mailboxes):
+        with (
+            mock.patch(
+                "prowler.providers.m365.lib.powershell.m365_powershell.M365PowerShell.connect_exchange_online",
+                return_value=True,
+            ),
+        ):
+            exchange_client = Exchange(
+                set_mocked_m365_provider(
+                    identity=M365IdentityInfo(tenant_domain=DOMAIN)
+                )
+            )
+            mailboxes = exchange_client.mailboxes
+            assert mailboxes is not None
+            assert len(mailboxes) == 1
+            assert mailboxes[0].identity == "user1@contoso.com"
+            exchange_client.powershell.close()
+
+    @patch(
+        "prowler.providers.m365.lib.powershell.m365_powershell.M365PowerShell.get_mailboxes",
+        side_effect=Exception("Get-EXOMailbox failed"),
+    )
+    def test_get_mailboxes_returns_none_on_exception(self, _mock_get_mailboxes):
+        with (
+            mock.patch(
+                "prowler.providers.m365.lib.powershell.m365_powershell.M365PowerShell.connect_exchange_online",
+                return_value=True,
+            ),
+        ):
+            exchange_client = Exchange(
+                set_mocked_m365_provider(
+                    identity=M365IdentityInfo(tenant_domain=DOMAIN)
+                )
+            )
+            assert exchange_client.mailboxes is None
             exchange_client.powershell.close()
 
     def test_get_total_paid_licenses_none(self):

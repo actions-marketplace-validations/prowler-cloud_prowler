@@ -1,8 +1,12 @@
 "use client";
 
-import { Ban, Box, Boxes } from "lucide-react";
+import { Box, Boxes } from "lucide-react";
 
 import { RadioCard } from "@/components/providers/radio-card";
+import { Badge } from "@/components/shadcn/badge/badge";
+import { isCloud } from "@/lib/shared/env";
+import { useCloudUpgradeStore } from "@/store";
+import { CLOUD_UPGRADE_FEATURE } from "@/types/cloud-upgrade";
 
 interface AwsMethodSelectorProps {
   onSelectSingle: () => void;
@@ -13,7 +17,10 @@ export function AwsMethodSelector({
   onSelectSingle,
   onSelectOrganizations,
 }: AwsMethodSelectorProps) {
-  const isCloudEnv = process.env.NEXT_PUBLIC_IS_CLOUD_ENV === "true";
+  const isCloudEnv = isCloud();
+  const openCloudUpgrade = useCloudUpgradeStore(
+    (state) => state.openCloudUpgrade,
+  );
 
   return (
     <div className="flex flex-col gap-3">
@@ -28,34 +35,16 @@ export function AwsMethodSelector({
       />
 
       <RadioCard
-        icon={isCloudEnv ? Boxes : Ban}
+        icon={Boxes}
         title="Add Multiple Accounts With AWS Organizations"
-        onClick={onSelectOrganizations}
-        disabled={!isCloudEnv}
+        onClick={() =>
+          isCloudEnv
+            ? onSelectOrganizations()
+            : openCloudUpgrade(CLOUD_UPGRADE_FEATURE.AWS_ORGANIZATIONS)
+        }
       >
-        {!isCloudEnv && <CtaBadge />}
+        {!isCloudEnv && <Badge variant="cloud">Cloud</Badge>}
       </RadioCard>
     </div>
-  );
-}
-
-function CtaBadge() {
-  return (
-    <a
-      href="https://prowler.com/pricing"
-      target="_blank"
-      rel="noopener noreferrer"
-      className="flex h-[52px] shrink-0 items-center justify-center rounded-lg px-4 py-3 transition-opacity hover:opacity-90"
-      style={{
-        backgroundImage:
-          "linear-gradient(112deg, rgb(46, 229, 155) 3.5%, rgb(98, 223, 240) 98.8%)",
-      }}
-    >
-      <div className="flex items-center gap-1.5">
-        <span className="text-primary-foreground text-sm leading-6 font-bold">
-          Available in Prowler Cloud
-        </span>
-      </div>
-    </a>
   );
 }

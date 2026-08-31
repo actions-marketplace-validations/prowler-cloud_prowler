@@ -7,6 +7,8 @@
 
 # testing
 /coverage
+__screenshots__/
+.vitest-attachments/
 
 # next.js
 /.next/
@@ -27,6 +29,9 @@ yarn-error.log*
 # local env files
 .env*.local
 .env
+
+# Claude Code local settings
+.claude/
 
 # vercel
 .vercel

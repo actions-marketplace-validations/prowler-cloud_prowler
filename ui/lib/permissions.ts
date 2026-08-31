@@ -1,3 +1,4 @@
+import { isCloud } from "@/lib/shared/env";
 import { RolePermissionAttributes } from "@/types/users";
 
 /**
@@ -30,6 +31,8 @@ export const isUserOwnerAndHasManageAccount = (
  * @returns The permissions for the user role
  */
 export const getRolePermissions = (attributes: RolePermissionAttributes) => {
+  const isCloudEnvironment = isCloud();
+
   const permissions = [
     {
       key: "manage_users",
@@ -57,6 +60,20 @@ export const getRolePermissions = (attributes: RolePermissionAttributes) => {
       label: "Manage Integrations",
       enabled: attributes.manage_integrations,
     },
+    ...(isCloudEnvironment
+      ? [
+          {
+            key: "manage_alerts",
+            label: "Manage Alerts",
+            enabled: attributes.manage_alerts ?? false,
+          },
+          {
+            key: "manage_lighthouse_ai_configuration",
+            label: "Manage Lighthouse AI",
+            enabled: attributes.manage_lighthouse_ai_configuration ?? false,
+          },
+        ]
+      : []),
     {
       key: "unlimited_visibility",
       label: "Unlimited Visibility",

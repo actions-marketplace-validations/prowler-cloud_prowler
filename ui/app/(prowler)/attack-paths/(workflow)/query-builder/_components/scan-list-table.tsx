@@ -5,18 +5,18 @@ import { Check, Minus } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useRef } from "react";
 
+import { DateWithTime } from "@/components/shadcn/entities/date-with-time";
+import { EntityInfo } from "@/components/shadcn/entities/entity-info";
 import {
   RadioGroup,
   RadioGroupItem,
 } from "@/components/shadcn/radio-group/radio-group";
+import { DataTable, DataTableColumnHeader } from "@/components/shadcn/table";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/shadcn/tooltip";
-import { DateWithTime } from "@/components/ui/entities/date-with-time";
-import { EntityInfo } from "@/components/ui/entities/entity-info";
-import { DataTable, DataTableColumnHeader } from "@/components/ui/table";
 import { formatDuration } from "@/lib/date-utils";
 import { cn } from "@/lib/utils";
 import type { MetaDataProps, ProviderType } from "@/types";
@@ -151,7 +151,7 @@ const getColumns = ({
   {
     accessorKey: "provider",
     header: ({ column }) => (
-      <DataTableColumnHeader column={column} title="Account" />
+      <DataTableColumnHeader column={column} title="Provider" />
     ),
     cell: ({ row }) => (
       <EntityInfo
@@ -244,13 +244,6 @@ export const ScanListTable = ({ scans }: ScanListTableProps) => {
   const endIndex = startIndex + pageSize;
   const paginatedScans = scans.slice(startIndex, endIndex);
 
-  // TODO(#10863): remove this workaround (ref + split handlers + pushWithParams)
-  // once the DataTable unified-pagination-callback refactor in PR #10863 lands.
-  // The underlying issue is that DataTablePagination's controlled mode fires
-  // onPageSizeChange and onPageChange(1) back-to-back in the same tick, so the
-  // second router.push reads a stale searchParams snapshot and silently reverts
-  // the page-size change. Replace both handlers with a single
-  // onPaginationChange handler after that PR merges.
   const suppressNextPageResetRef = useRef(false);
 
   const pushWithParams = (nextParams: Record<string, string>) => {
@@ -302,6 +295,9 @@ export const ScanListTable = ({ scans }: ScanListTableProps) => {
             handleSelectScan(row.original.id);
           }
         }}
+        getRowAttributes={(row) =>
+          row.index === 0 ? { "data-tour-id": "attack-paths-scan-list" } : {}
+        }
         enableRowSelection
         rowSelection={getSelectedRowSelection(paginatedScans, selectedScanId)}
       />

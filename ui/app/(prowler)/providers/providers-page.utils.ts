@@ -1,23 +1,34 @@
+import { getAllProviderGroups } from "@/actions/manage-groups/manage-groups";
 import {
+  listOrganizationNodesSafe,
   listOrganizationsSafe,
-  listOrganizationUnitsSafe,
 } from "@/actions/organizations/organizations";
-import { getProviders } from "@/actions/providers";
-import { getScans } from "@/actions/scans";
+import { getAllProviders, getProviders } from "@/actions/providers";
+import { PROVIDERS_FILTER_PARAM } from "@/actions/providers/providers-filters";
+import { getSchedules } from "@/actions/schedules";
 import {
   extractFiltersAndQuery,
   extractSortAndKey,
 } from "@/lib/helper-filters";
 import {
+  buildProviderScheduleSummary,
+  buildScheduleAttributesFromProvider,
+  buildSchedulesByProviderId,
+  isScheduleConfigured,
+} from "@/lib/schedules";
+import {
+  CollectionFetch,
   FilterEntity,
   FilterOption,
-  OrganizationListResponse,
-  OrganizationUnitListResponse,
-  OrganizationUnitResource,
+  OrganizationNodeResource,
+  OrganizationResource,
+  OrganizationType,
   ProvidersApiResponse,
   SearchParamsProps,
 } from "@/types";
 import {
+  HIERARCHY_STATUS,
+  HierarchyStatus,
   PROVIDERS_GROUP_KIND,
   PROVIDERS_PAGE_FILTER,
   PROVIDERS_ROW_TYPE,
@@ -27,7 +38,8 @@ import {
   ProvidersTableRow,
   ProvidersTableRowsInput,
 } from "@/types/providers-table";
-import { SCAN_TRIGGER, ScanProps } from "@/types/scans";
+import { ScanScheduleSummary } from "@/types/scans";
+import { ScheduleAttributes } from "@/types/schedules";
 
 const PROVIDERS_STATUS_MAPPING = [
   {
@@ -107,69 +119,98 @@ const createProviderGroupLookup = (
   return lookup;
 };
 
-const ACTIVE_SCAN_STATES = new Set(["scheduled", "available", "executing"]);
+// A schedule is backed by the Provider row itself, so its `/schedules` entry
+// exists before the first scheduled Scan is materialized — only enabled,
+// configured ones carry a displayable cadence summary.
+const buildProviderScheduleSummaryFor = (
+  attributes: ScheduleAttributes | undefined,
+  now: Date,
+): ScanScheduleSummary | undefined =>
+  attributes && attributes.scan_enabled && isScheduleConfigured(attributes)
+    ? buildProviderScheduleSummary(attributes, now)
+    : undefined;
 
-const buildScheduledProviderIds = (scans: ScanProps[]): Set<string> => {
-  const scheduled = new Set<string>();
-
-  for (const scan of scans) {
-    if (
-      scan.attributes.trigger === SCAN_TRIGGER.SCHEDULED &&
-      ACTIVE_SCAN_STATES.has(scan.attributes.state)
-    ) {
-      const providerId = scan.relationships.provider?.data?.id;
-      if (providerId) {
-        scheduled.add(providerId);
-      }
-    }
+const getProviderLastScanAt = (
+  provider: ProvidersApiResponse["data"][number],
+): string | null => {
+  if (
+    Object.prototype.hasOwnProperty.call(provider.attributes, "last_scan_at")
+  ) {
+    return provider.attributes.last_scan_at ?? null;
   }
 
-  return scheduled;
+  return provider.attributes.connection.last_checked_at ?? null;
 };
 
 const enrichProviders = (
-  providersResponse?: ProvidersApiResponse,
-  scheduledProviderIds?: Set<string>,
+  providersResponse: ProvidersApiResponse | undefined,
+  schedulesByProviderId: Record<string, ScheduleAttributes>,
 ): ProvidersProviderRow[] => {
   const providerGroupLookup = createProviderGroupLookup(providersResponse);
+  const now = new Date();
 
-  return (providersResponse?.data ?? []).map((provider) => ({
-    ...provider,
-    rowType: PROVIDERS_ROW_TYPE.PROVIDER,
-    groupNames:
-      provider.relationships.provider_groups.data.map(
-        (providerGroup: { id: string }) =>
-          providerGroupLookup.get(providerGroup.id) ?? "Unknown Group",
-      ) ?? [],
-    hasSchedule: scheduledProviderIds?.has(provider.id) ?? false,
-  }));
+  return (providersResponse?.data ?? []).map((provider) => {
+    const providerScheduleAttributes = buildScheduleAttributesFromProvider(
+      provider.attributes,
+    );
+    const scheduleAttributes =
+      providerScheduleAttributes ?? schedulesByProviderId[provider.id];
+    const scheduleSummary = buildProviderScheduleSummaryFor(
+      scheduleAttributes,
+      now,
+    );
+
+    return {
+      ...provider,
+      rowType: PROVIDERS_ROW_TYPE.PROVIDER,
+      groupNames:
+        provider.relationships.provider_groups.data.map(
+          (providerGroup: { id: string }) =>
+            providerGroupLookup.get(providerGroup.id) ?? "Unknown Group",
+        ) ?? [],
+      // Provider scan_* fields are authoritative when present; otherwise we
+      // only fall back to the /schedules resource, never materialized scans.
+      hasSchedule: scheduleSummary !== undefined,
+      scheduleSummary,
+      lastScanAt: getProviderLastScanAt(provider),
+    };
+  });
 };
 
 const createOrganizationRow = ({
   groupKind,
+  orgType,
+  kind,
   id,
   name,
   externalId,
   organizationId,
   parentExternalId,
+  providerIds,
   subRows,
 }: {
   externalId: string | null;
   groupKind: ProvidersOrganizationRow["groupKind"];
+  orgType: OrganizationType;
+  kind?: ProvidersOrganizationRow["kind"];
   id: string;
   name: string;
   organizationId: string | null;
   parentExternalId: string | null;
+  providerIds: string[];
   subRows: ProvidersTableRow[];
 }): ProvidersOrganizationRow => ({
   id,
   rowType: PROVIDERS_ROW_TYPE.ORGANIZATION,
   groupKind,
+  orgType,
+  kind,
   name,
   externalId,
   organizationId,
   parentExternalId,
-  providerCount: countProviderRows(subRows),
+  providerCount: providerIds.length,
+  providerIds,
   subRows,
 });
 
@@ -185,10 +226,10 @@ function getRelationshipProviderIds(
   return relationships?.providers?.data?.map((provider) => provider.id) ?? [];
 }
 
-function getOrganizationUnitParentId(
-  organizationUnit: OrganizationUnitResource,
+function getOrganizationNodeParentId(
+  organizationNode: OrganizationNodeResource,
 ): string | null {
-  return organizationUnit.relationships.parent?.data?.id ?? null;
+  return organizationNode.relationships.parent?.data?.id ?? null;
 }
 
 function getProviderRowsByIds({
@@ -203,42 +244,85 @@ function getProviderRowsByIds({
     .filter((provider): provider is ProvidersProviderRow => Boolean(provider));
 }
 
-function countProviderRows(rows: ProvidersTableRow[]): number {
-  return rows.reduce((total, row) => {
-    if (row.rowType === PROVIDERS_ROW_TYPE.PROVIDER) {
-      return total + 1;
-    }
+/**
+ * Resolves a group's direct providers: the `providers` relationship when the API
+ * serves one, the reverse-lookup map otherwise.
+ */
+function resolveProviderRowsAndIds({
+  relationships,
+  fallbackProviders,
+  providerLookup,
+  excludeIds,
+}: {
+  relationships: Parameters<typeof getRelationshipProviderIds>[0];
+  fallbackProviders: ProvidersProviderRow[];
+  providerLookup: Map<string, ProvidersProviderRow>;
+  excludeIds?: ReadonlySet<string>;
+}): { providerRows: ProvidersProviderRow[]; directProviderIds: string[] } {
+  const isIncluded = (provider: ProvidersProviderRow) =>
+    !excludeIds?.has(provider.id);
+  const relationshipProviderIds = getRelationshipProviderIds(relationships);
+  const rowsFromRelationships = getProviderRowsByIds({
+    providerIds: relationshipProviderIds,
+    providerLookup,
+  }).filter(isIncluded);
 
-    return total + countProviderRows(row.subRows);
-  }, 0);
+  if (rowsFromRelationships.length > 0) {
+    return {
+      providerRows: rowsFromRelationships,
+      // The relationship ids, not the resolved rows: the lookup holds only the
+      // current page, while the id set drives the group's counts and filtering.
+      directProviderIds: relationshipProviderIds,
+    };
+  }
+
+  const providerRows = fallbackProviders.filter(isIncluded);
+
+  return {
+    providerRows,
+    directProviderIds: providerRows.map((provider) => provider.id),
+  };
 }
 
-function getOrganizationUnitRelationshipId(
+function dedupeIds(ids: string[]): string[] {
+  return Array.from(new Set(ids));
+}
+
+function collectOrganizationRowProviderIds(
+  rows: ProvidersOrganizationRow[],
+): string[] {
+  return dedupeIds(rows.flatMap((row) => row.providerIds));
+}
+
+function getOrganizationNodeRelationshipId(
   provider: ProvidersProviderRow,
 ): string | null {
   return (
+    provider.relationships.organization_node?.data?.id ??
     provider.relationships.organization_unit?.data?.id ??
     provider.relationships.organizational_unit?.data?.id ??
     null
   );
 }
 
-function buildOrganizationUnitRows({
+function buildOrganizationNodeRows({
   organizationId,
-  organizationUnits,
+  organizationType,
+  organizationNodes,
   providerLookup,
-  providersByOrganizationUnitId,
+  providersByOrganizationNodeId,
   useParentIdRelationships,
   parentExternalId,
-  parentOrganizationUnitId,
+  parentOrganizationNodeId,
   maxDepth = 10,
 }: {
   organizationId: string;
-  organizationUnits: OrganizationUnitResource[];
+  organizationType: OrganizationType;
+  organizationNodes: OrganizationNodeResource[];
   parentExternalId: string | null;
-  parentOrganizationUnitId: string | null;
+  parentOrganizationNodeId: string | null;
   providerLookup: Map<string, ProvidersProviderRow>;
-  providersByOrganizationUnitId: Map<string, ProvidersProviderRow[]>;
+  providersByOrganizationNodeId: Map<string, ProvidersProviderRow[]>;
   useParentIdRelationships: boolean;
   maxDepth?: number;
 }): ProvidersOrganizationRow[] {
@@ -246,55 +330,63 @@ function buildOrganizationUnitRows({
     return [];
   }
 
-  return organizationUnits
+  return organizationNodes
     .filter(
-      (organizationUnit) =>
-        organizationUnit.relationships.organization.data.id ===
+      (organizationNode) =>
+        organizationNode.relationships.organization.data.id ===
           organizationId &&
         (useParentIdRelationships
-          ? getOrganizationUnitParentId(organizationUnit) ===
-            parentOrganizationUnitId
-          : organizationUnit.attributes.parent_external_id ===
+          ? getOrganizationNodeParentId(organizationNode) ===
+            parentOrganizationNodeId
+          : organizationNode.attributes.parent_external_id ===
             parentExternalId),
     )
-    .map((organizationUnit) => {
-      const childOrganizationUnitRows = buildOrganizationUnitRows({
+    .map((organizationNode) => {
+      const childOrganizationNodeRows = buildOrganizationNodeRows({
         organizationId,
-        organizationUnits,
-        parentOrganizationUnitId: organizationUnit.id,
-        parentExternalId: organizationUnit.attributes.external_id,
+        organizationType,
+        organizationNodes,
+        parentOrganizationNodeId: organizationNode.id,
+        parentExternalId: organizationNode.attributes.external_id,
         providerLookup,
-        providersByOrganizationUnitId,
+        providersByOrganizationNodeId,
         useParentIdRelationships,
         maxDepth: maxDepth - 1,
       });
-      const providerRowsFromRelationships = getProviderRowsByIds({
-        providerIds: getRelationshipProviderIds(organizationUnit.relationships),
+      const { providerRows, directProviderIds } = resolveProviderRowsAndIds({
+        relationships: organizationNode.relationships,
+        fallbackProviders:
+          providersByOrganizationNodeId.get(organizationNode.id) ?? [],
         providerLookup,
       });
-      const providerRows =
-        providerRowsFromRelationships.length > 0
-          ? providerRowsFromRelationships
-          : (providersByOrganizationUnitId.get(organizationUnit.id) ?? []);
-      const subRows = [...childOrganizationUnitRows, ...providerRows];
+      const subRows = [...childOrganizationNodeRows, ...providerRows];
+      const childProviderIds = collectOrganizationRowProviderIds(
+        childOrganizationNodeRows,
+      );
 
       return createOrganizationRow({
         groupKind: PROVIDERS_GROUP_KIND.ORGANIZATION_UNIT,
-        id: organizationUnit.id,
-        name: organizationUnit.attributes.name,
-        externalId: organizationUnit.attributes.external_id,
+        orgType: organizationType,
+        kind: organizationNode.attributes.kind,
+        id: organizationNode.id,
+        name: organizationNode.attributes.name,
+        externalId: organizationNode.attributes.external_id,
         organizationId,
-        parentExternalId: organizationUnit.attributes.parent_external_id,
+        parentExternalId:
+          organizationNode.attributes.parent_external_id ?? null,
+        providerIds: dedupeIds([...childProviderIds, ...directProviderIds]),
         subRows,
       });
     })
-    .filter((organizationUnitRow) => organizationUnitRow.subRows.length > 0);
+    .filter(
+      (organizationNodeRow) => organizationNodeRow.providerIds.length > 0,
+    );
 }
 
 export function buildProvidersTableRows({
   isCloud,
   organizations,
-  organizationUnits,
+  organizationNodes,
   providers,
 }: ProvidersTableRowsInput): ProvidersTableRow[] {
   if (!isCloud) {
@@ -305,7 +397,7 @@ export function buildProvidersTableRows({
     providers.map((provider) => [provider.id, provider] as const),
   );
   const providersByOrganizationId = new Map<string, ProvidersProviderRow[]>();
-  const providersByOrganizationUnitId = new Map<
+  const providersByOrganizationNodeId = new Map<
     string,
     ProvidersProviderRow[]
   >();
@@ -313,15 +405,15 @@ export function buildProvidersTableRows({
   for (const provider of providers) {
     const organizationId =
       provider.relationships.organization?.data?.id ?? null;
-    const organizationUnitId = getOrganizationUnitRelationshipId(provider);
+    const organizationNodeId = getOrganizationNodeRelationshipId(provider);
 
-    if (organizationUnitId) {
-      const organizationUnitProviders =
-        providersByOrganizationUnitId.get(organizationUnitId) ?? [];
-      organizationUnitProviders.push(provider);
-      providersByOrganizationUnitId.set(
-        organizationUnitId,
-        organizationUnitProviders,
+    if (organizationNodeId) {
+      const organizationNodeProviders =
+        providersByOrganizationNodeId.get(organizationNodeId) ?? [];
+      organizationNodeProviders.push(provider);
+      providersByOrganizationNodeId.set(
+        organizationNodeId,
+        organizationNodeProviders,
       );
       continue;
     }
@@ -334,71 +426,87 @@ export function buildProvidersTableRows({
     }
   }
 
-  const useParentIdRelationships = organizationUnits.some(
-    (organizationUnit) => organizationUnit.relationships.parent !== undefined,
-  );
-
-  // Build a set of provider IDs that are assigned to OUs, so we can
+  // Build a set of provider IDs that are assigned to nodes, so we can
   // exclude them from the org's direct children and avoid duplication.
-  const providersAssignedToOu = new Set(
-    Array.from(providersByOrganizationUnitId.values()).flatMap((providers) =>
+  const providersAssignedToNode = new Set(
+    Array.from(providersByOrganizationNodeId.values()).flatMap((providers) =>
       providers.map((p) => p.id),
     ),
   );
 
   const organizationRows = organizations
     .map((organization) => {
-      const organizationUnitRows = buildOrganizationUnitRows({
+      const organizationType = organization.attributes.org_type;
+      // Which parent link to follow is decided per organization, not across the
+      // whole collection: one organization serving `parent` would otherwise make
+      // every organization read its nodes that way, and those lacking the
+      // relationship would resolve every parent to null — collapsing their nodes
+      // to the root, emptying the intermediate rows and dropping them entirely.
+      const useParentIdRelationships = organizationNodes.some(
+        (organizationNode) =>
+          organizationNode.relationships.organization.data.id ===
+            organization.id &&
+          organizationNode.relationships.parent !== undefined,
+      );
+      const organizationNodeRows = buildOrganizationNodeRows({
         organizationId: organization.id,
-        organizationUnits,
-        parentOrganizationUnitId: null,
+        organizationType,
+        organizationNodes,
+        parentOrganizationNodeId: null,
         parentExternalId: organization.attributes.root_external_id,
         providerLookup,
-        providersByOrganizationUnitId,
+        providersByOrganizationNodeId,
         useParentIdRelationships,
       });
 
-      // Collect all provider IDs already placed inside OUs to avoid duplication
-      // at the org level. This covers both relationship-based and fallback assignments.
-      const providersInOus = new Set<string>();
-      function collectOuProviderIds(rows: ProvidersTableRow[]) {
+      // Collect all provider IDs already placed inside nodes to avoid
+      // duplication at the org level. Covers relationship + fallback assignments.
+      const providersInNodes = new Set<string>();
+      function collectNodeProviderIds(rows: ProvidersTableRow[]) {
         for (const row of rows) {
           if (row.rowType === PROVIDERS_ROW_TYPE.PROVIDER) {
-            providersInOus.add(row.id);
+            providersInNodes.add(row.id);
           } else {
-            collectOuProviderIds(row.subRows);
+            collectNodeProviderIds(row.subRows);
           }
         }
       }
-      collectOuProviderIds(organizationUnitRows);
+      collectNodeProviderIds(organizationNodeRows);
 
-      const organizationProvidersFromRelationships = getProviderRowsByIds({
-        providerIds: getRelationshipProviderIds(organization.relationships),
-        providerLookup,
-      }).filter(
-        (provider) =>
-          !providersAssignedToOu.has(provider.id) &&
-          !providersInOus.has(provider.id),
-      );
-      const organizationProviders =
-        organizationProvidersFromRelationships.length > 0
-          ? organizationProvidersFromRelationships
-          : (providersByOrganizationId.get(organization.id) ?? []).filter(
-              (provider) => !providersInOus.has(provider.id),
-            );
-      const subRows = [...organizationProviders, ...organizationUnitRows];
+      // One exclude set for both branches: the fallback map skips providers that
+      // carry a node relationship, so `providersAssignedToNode` can only ever
+      // match on the relationship branch.
+      const { providerRows: organizationProviders, directProviderIds } =
+        resolveProviderRowsAndIds({
+          relationships: organization.relationships,
+          fallbackProviders:
+            providersByOrganizationId.get(organization.id) ?? [],
+          providerLookup,
+          excludeIds: new Set([
+            ...Array.from(providersAssignedToNode),
+            ...Array.from(providersInNodes),
+          ]),
+        });
+      const subRows = [...organizationProviders, ...organizationNodeRows];
+      const organizationNodeProviderIds =
+        collectOrganizationRowProviderIds(organizationNodeRows);
 
       return createOrganizationRow({
         groupKind: PROVIDERS_GROUP_KIND.ORGANIZATION,
+        orgType: organizationType,
         id: organization.id,
         name: organization.attributes.name,
         externalId: organization.attributes.external_id,
         organizationId: organization.id,
         parentExternalId: organization.attributes.root_external_id,
+        providerIds: dedupeIds([
+          ...directProviderIds,
+          ...organizationNodeProviderIds,
+        ]),
         subRows,
       });
     })
-    .filter((organizationRow) => organizationRow.subRows.length > 0);
+    .filter((organizationRow) => organizationRow.providerIds.length > 0);
 
   const assignedProviderIds = new Set<string>();
 
@@ -434,27 +542,28 @@ export async function loadProvidersAccountsViewData({
 
   // Map provider_type__in (used by ProviderTypeSelector) to provider__in (API param)
   const providerTypeFilter =
-    providerFilters[`filter[${PROVIDERS_PAGE_FILTER.PROVIDER_TYPE}]`];
+    providerFilters[PROVIDERS_FILTER_PARAM.PROVIDER_TYPE];
   if (providerTypeFilter) {
-    providerFilters[`filter[${PROVIDERS_PAGE_FILTER.PROVIDER}]`] =
-      providerTypeFilter;
+    providerFilters[PROVIDERS_FILTER_PARAM.PROVIDER] = providerTypeFilter;
   }
 
-  delete providerFilters[`filter[${PROVIDERS_PAGE_FILTER.PROVIDER_TYPE}]`];
+  delete providerFilters[PROVIDERS_FILTER_PARAM.PROVIDER_TYPE];
 
-  const emptyOrganizationsResponse: OrganizationListResponse = {
+  const emptyOrganizationsResponse: CollectionFetch<OrganizationResource> = {
     data: [],
   };
-  const emptyOrganizationUnitsResponse: OrganizationUnitListResponse = {
-    data: [],
-  };
+  const emptyOrganizationNodesResponse: CollectionFetch<OrganizationNodeResource> =
+    {
+      data: [],
+    };
 
   const [
     providersResponse,
     allProvidersResponse,
-    scansResponse,
+    allProviderGroupsResponse,
+    schedulesResponse,
     organizationsResponse,
-    organizationUnitsResponse,
+    organizationNodesResponse,
   ] = await Promise.all([
     resolveActionResult(
       getProviders({
@@ -467,37 +576,39 @@ export async function loadProvidersAccountsViewData({
     ),
     // Unfiltered fetch for ProviderTypeSelector — only needs distinct types;
     // TODO: Replace with a dedicated lightweight endpoint when available.
-    resolveActionResult(getProviders({ pageSize: 500 })),
-    // Fetch active scheduled scans to determine daily schedule per provider
-    resolveActionResult(
-      getScans({
-        pageSize: 500,
-        filters: {
-          "filter[trigger]": SCAN_TRIGGER.SCHEDULED,
-          "filter[state__in]": "scheduled,available",
-        },
-      }),
-    ),
+    resolveActionResult(getAllProviders()),
+    // Unfiltered fetch for the Provider Group selector dropdown.
+    resolveActionResult(getAllProviderGroups()),
+    // Fetch configured schedules as a fallback when provider scan_* fields are
+    // absent (best-effort: typically empty in OSS).
+    resolveActionResult(getSchedules()),
     isCloud
       ? listOrganizationsSafe()
       : Promise.resolve(emptyOrganizationsResponse),
     isCloud
-      ? listOrganizationUnitsSafe()
-      : Promise.resolve(emptyOrganizationUnitsResponse),
+      ? listOrganizationNodesSafe()
+      : Promise.resolve(emptyOrganizationNodesResponse),
   ]);
 
-  const scheduledProviderIds = buildScheduledProviderIds(
-    scansResponse?.data ?? [],
-  );
+  const schedulesByProviderId = buildSchedulesByProviderId(schedulesResponse);
 
-  const orgs = organizationsResponse?.data ?? [];
-  const ous = organizationUnitsResponse?.data ?? [];
-  const providers = enrichProviders(providersResponse, scheduledProviderIds);
+  const orgs = organizationsResponse.data;
+  const nodes = organizationNodesResponse.data;
+  const providers = enrichProviders(providersResponse, schedulesByProviderId);
 
+  const hierarchyStatus: HierarchyStatus =
+    isCloud &&
+    (Boolean(organizationsResponse.error) ||
+      Boolean(organizationNodesResponse.error))
+      ? HIERARCHY_STATUS.UNAVAILABLE
+      : HIERARCHY_STATUS.AVAILABLE;
+
+  // Whatever was read is still rendered; the notice is worded for both partial
+  // shapes rather than promising a flat list.
   const rows = buildProvidersTableRows({
     isCloud,
     organizations: orgs,
-    organizationUnits: ous,
+    organizationNodes: nodes,
     providers,
   });
 
@@ -505,7 +616,9 @@ export async function loadProvidersAccountsViewData({
     filters: createProvidersFilters(),
     metadata: providersResponse?.meta,
     providers: allProvidersResponse?.data ?? [],
+    providerGroups: allProviderGroupsResponse?.data ?? [],
     rows,
+    hierarchyStatus,
   };
 }
 

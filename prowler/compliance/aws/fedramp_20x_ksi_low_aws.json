@@ -37,6 +37,14 @@
         "ssm_managed_compliant_patching",
         "ssm_managed_instance_compliance_association_compliant",
         "ssm_managed_instance_compliance_patch_compliant"
+      ],
+      "ConfigRequirements": [
+        {
+          "Check": "config_recorder_all_regions_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        }
       ]
     },
     {
@@ -71,7 +79,8 @@
         "rds_cluster_multi_az",
         "vpc_subnet_auto_assign_public_ip_disabled",
         "vpc_default_security_group_restricts_traffic",
-        "vpc_peering_connection_routing_tables_with_least_privilege"
+        "vpc_peering_connection_routing_tables_with_least_privilege",
+        "ec2_confidential_workload_host_imdsv2_not_enforced"
       ]
     },
     {
@@ -109,6 +118,7 @@
         "iam_rotate_access_key_90_days",
         "iam_role_access_not_stale_to_bedrock",
         "iam_user_access_not_stale_to_bedrock",
+        "iam_user_access_not_stale_to_sagemaker",
         "iam_user_accesskey_unused",
         "iam_user_console_access_unused",
         "iam_user_hardware_mfa_enabled",
@@ -145,6 +155,20 @@
         "inspector2_active_findings_exist",
         "securityhub_enabled",
         "sns_topics_kms_encryption_at_rest_enabled"
+      ],
+      "ConfigRequirements": [
+        {
+          "Check": "guardduty_is_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        },
+        {
+          "Check": "securityhub_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        }
       ]
     },
     {
@@ -179,7 +203,9 @@
         "redshift_cluster_audit_logging",
         "s3_bucket_server_access_logging_enabled",
         "vpc_flow_logs_enabled",
-        "wafv2_webacl_logging_enabled"
+        "wafv2_webacl_logging_enabled",
+        "kms_key_enclave_debug_attestation_detected",
+        "kms_key_enclave_attestation_unknown_image"
       ]
     },
     {
@@ -204,6 +230,14 @@
         "resourceexplorer_indexes_found",
         "ssm_managed_instance_compliance_association_compliant",
         "trustedadvisor_premium_support_plan_subscribed"
+      ],
+      "ConfigRequirements": [
+        {
+          "Check": "config_recorder_all_regions_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        }
       ]
     },
     {
@@ -279,7 +313,8 @@
         "s3_bucket_secure_transport_policy",
         "sagemaker_notebook_instance_encryption_enabled",
         "sns_topics_kms_encryption_at_rest_enabled",
-        "sqs_queue_server_side_encryption_enabled"
+        "sqs_queue_server_side_encryption_enabled",
+        "kms_key_enclave_attestation_not_enforced"
       ]
     },
     {
@@ -325,6 +360,7 @@
         "iam_rotate_access_key_90_days",
         "iam_role_access_not_stale_to_bedrock",
         "iam_user_access_not_stale_to_bedrock",
+        "iam_user_access_not_stale_to_sagemaker",
         "iam_user_accesskey_unused",
         "iam_user_console_access_unused",
         "organizations_delegated_administrators"
@@ -347,6 +383,14 @@
         "config_recorder_all_regions_enabled",
         "inspector2_is_enabled",
         "resourceexplorer_indexes_found"
+      ],
+      "ConfigRequirements": [
+        {
+          "Check": "config_recorder_all_regions_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        }
       ]
     }
   ]

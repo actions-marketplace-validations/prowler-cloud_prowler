@@ -1,6 +1,12 @@
 "use client";
 
-import { Download, Minimize2, ZoomIn, ZoomOut } from "lucide-react";
+import {
+  ChevronsDownUp,
+  Download,
+  Minimize2,
+  ZoomIn,
+  ZoomOut,
+} from "lucide-react";
 
 import { Button } from "@/components/shadcn";
 import {
@@ -10,11 +16,21 @@ import {
   TooltipTrigger,
 } from "@/components/shadcn/tooltip";
 
+// Collapse-all is all-or-nothing: the enabled flag and its handler always
+// travel together, so a button can never be enabled without something to do.
+interface GraphCollapseAll {
+  can: boolean;
+  onCollapse: () => void;
+}
+
 interface GraphControlsProps {
   onZoomIn: () => void;
   onZoomOut: () => void;
   onFitToScreen: () => void;
-  onExport: () => void;
+  onExport?: () => void;
+  // Collapse every expanded resource-class group. Omitted where unsupported;
+  // the button hides itself while nothing is expanded.
+  collapseAll?: GraphCollapseAll;
 }
 
 /**
@@ -26,18 +42,35 @@ export const GraphControls = ({
   onZoomOut,
   onFitToScreen,
   onExport,
+  collapseAll,
 }: GraphControlsProps) => {
   return (
     <div className="flex items-center">
       <div className="border-border-neutral-primary bg-bg-neutral-tertiary flex gap-1 rounded-lg border p-1">
         <TooltipProvider>
+          {collapseAll?.can && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={collapseAll.onCollapse}
+                  aria-label="Collapse all groups"
+                >
+                  <ChevronsDownUp size={18} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Collapse all groups</TooltipContent>
+            </Tooltip>
+          )}
+
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
-                size="sm"
+                size="icon-sm"
                 onClick={onZoomIn}
-                className="h-8 w-8 p-0"
+                aria-label="Zoom in"
               >
                 <ZoomIn size={18} />
               </Button>
@@ -49,9 +82,9 @@ export const GraphControls = ({
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
-                size="sm"
+                size="icon-sm"
                 onClick={onZoomOut}
-                className="h-8 w-8 p-0"
+                aria-label="Zoom out"
               >
                 <ZoomOut size={18} />
               </Button>
@@ -63,9 +96,9 @@ export const GraphControls = ({
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
-                size="sm"
+                size="icon-sm"
                 onClick={onFitToScreen}
-                className="h-8 w-8 p-0"
+                aria-label="Fit graph to view"
               >
                 <Minimize2 size={18} />
               </Button>
@@ -77,14 +110,17 @@ export const GraphControls = ({
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
-                size="sm"
+                size="icon-sm"
                 onClick={onExport}
-                className="h-8 w-8 p-0"
+                disabled={!onExport}
+                aria-label={onExport ? "Export graph" : "Export available soon"}
               >
                 <Download size={18} />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Export graph</TooltipContent>
+            <TooltipContent>
+              {onExport ? "Export graph" : "Export available soon"}
+            </TooltipContent>
           </Tooltip>
         </TooltipProvider>
       </div>

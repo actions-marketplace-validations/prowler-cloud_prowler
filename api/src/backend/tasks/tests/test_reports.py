@@ -1,3 +1,5 @@
+import errno
+import logging
 import os
 import time
 import uuid
@@ -5,10 +7,25 @@ from unittest.mock import Mock, patch
 
 import matplotlib
 import pytest
+from api.models import (
+    Finding,
+    Resource,
+    ResourceFindingMapping,
+    ResourceTag,
+    ResourceTagMapping,
+    StateChoices,
+    StatusChoices,
+)
+from config.settings.sentry import (
+    ERROR_CATEGORY_ATTRIBUTE,
+    FILESYSTEM_ERROR_CATEGORY,
+    before_send,
+)
+from prowler.lib.check.models import Severity
 from reportlab.lib import colors
 from tasks.jobs.report import (
-    STALE_TMP_OUTPUT_MAX_AGE_HOURS,
     STALE_TMP_OUTPUT_LOCK_FILE_NAME,
+    STALE_TMP_OUTPUT_MAX_AGE_HOURS,
     _cleanup_stale_tmp_output_directories,
     _is_scan_directory_protected,
     _pick_latest_cis_variant,
@@ -35,21 +52,46 @@ from tasks.jobs.reports import (
     get_color_for_risk_level,
     get_color_for_weight,
 )
+from tasks.jobs.reports import cis as cis_report_module
+from tasks.jobs.reports import csa as csa_report_module
+from tasks.jobs.reports import ens as ens_report_module
+from tasks.jobs.reports import nis2 as nis2_report_module
+from tasks.jobs.reports import threatscore as threatscore_report_module
 from tasks.jobs.threatscore_utils import (
     _aggregate_requirement_statistics_from_database,
     _load_findings_for_requirement_checks,
 )
-
-from api.models import (
-    Finding,
-    Resource,
-    ResourceFindingMapping,
-    StateChoices,
-    StatusChoices,
-)
-from prowler.lib.check.models import Severity
+from tasks.tests.report_test_helpers import patch_chart_helpers, patch_report_gc
 
 matplotlib.use("Agg")  # Use non-interactive backend for tests
+
+
+@pytest.fixture
+def patch_report_rendering(monkeypatch):
+    patch_report_gc(monkeypatch)
+    patch_chart_helpers(
+        monkeypatch,
+        cis_report_module,
+        (
+            "create_pie_chart",
+            "create_horizontal_bar_chart",
+            "create_stacked_bar_chart",
+        ),
+    )
+    patch_chart_helpers(
+        monkeypatch, csa_report_module, ("create_horizontal_bar_chart",)
+    )
+    patch_chart_helpers(
+        monkeypatch,
+        ens_report_module,
+        ("create_horizontal_bar_chart", "create_radar_chart"),
+    )
+    patch_chart_helpers(
+        monkeypatch, nis2_report_module, ("create_horizontal_bar_chart",)
+    )
+    patch_chart_helpers(
+        monkeypatch, threatscore_report_module, ("create_vertical_bar_chart",)
+    )
 
 
 @pytest.mark.django_db
@@ -354,7 +396,7 @@ class TestPDFStylesCreation:
 class TestLoadFindingsForChecks:
     """Test suite for _load_findings_for_requirement_checks function."""
 
-    def test_empty_check_ids_returns_empty(self, tenants_fixture, providers_fixture):
+    def test_empty_check_ids_returns_empty(self, tenants_fixture):
         """Test that empty check_ids list returns empty dict."""
         tenant = tenants_fixture[0]
 
@@ -366,6 +408,317 @@ class TestLoadFindingsForChecks:
         )
 
         assert result == {}
+
+    def test_prefetch_avoids_n_plus_one(self, tenants_fixture, scans_fixture):
+        """Loading N findings must NOT execute O(N) extra queries for resources/tags.
+
+        Regression test for PROWLER-1733. ``FindingOutput.transform_api_finding``
+        reads ``finding.resources.first()`` and ``resource.tags.all()`` per
+        finding. Without ``prefetch_related`` that's 2N additional queries;
+        with prefetch it collapses to a small constant per iterator chunk.
+        """
+        from django.db import connections
+        from django.test.utils import CaptureQueriesContext
+
+        tenant = tenants_fixture[0]
+        scan = scans_fixture[0]
+
+        # Build N findings, each linked to one resource that owns 2 tags.
+        N = 20
+        for i in range(N):
+            finding = Finding.objects.create(
+                tenant_id=tenant.id,
+                scan=scan,
+                uid=f"f-prefetch-{i}",
+                check_id="aws_check_prefetch",
+                status=StatusChoices.FAIL,
+                severity=Severity.high,
+                impact=Severity.high,
+                check_metadata={
+                    "provider": "aws",
+                    "checkid": "aws_check_prefetch",
+                    "checktitle": "t",
+                    "checktype": [],
+                    "servicename": "s",
+                    "subservicename": "",
+                    "severity": "high",
+                    "resourcetype": "r",
+                    "description": "",
+                    "risk": "",
+                    "relatedurl": "",
+                    "remediation": {
+                        "recommendation": {"text": "", "url": ""},
+                        "code": {
+                            "nativeiac": "",
+                            "terraform": "",
+                            "cli": "",
+                            "other": "",
+                        },
+                    },
+                    "resourceidtemplate": "",
+                    "categories": [],
+                    "dependson": [],
+                    "relatedto": [],
+                    "notes": "",
+                },
+                raw_result={},
+            )
+            resource = Resource.objects.create(
+                tenant_id=tenant.id,
+                provider=scan.provider,
+                uid=f"r-prefetch-{i}",
+                name=f"r-prefetch-{i}",
+                metadata="{}",
+                details="",
+                region="us-east-1",
+                service="s",
+                type="t::r",
+            )
+            ResourceFindingMapping.objects.create(
+                tenant_id=tenant.id, finding=finding, resource=resource
+            )
+            for k in ("env", "owner"):
+                tag, _ = ResourceTag.objects.get_or_create(
+                    tenant_id=tenant.id, key=k, value=f"v-{i}-{k}"
+                )
+                ResourceTagMapping.objects.create(
+                    tenant_id=tenant.id, resource=resource, tag=tag
+                )
+
+        mock_provider = Mock()
+        mock_provider.type = "aws"
+        mock_provider.identity.account = "test"
+
+        # Patch transform_api_finding to a no-op so the test isolates queries
+        # to the queryset/prefetch path (transform itself is exercised by
+        # the integration tests above and not by this regression check).
+        with patch(
+            "tasks.jobs.threatscore_utils.FindingOutput.transform_api_finding",
+            side_effect=lambda model, provider: Mock(check_id=model.check_id),
+        ):
+            with CaptureQueriesContext(
+                connections["default_read_replica"]
+                if "default_read_replica" in connections.databases
+                else connections["default"]
+            ) as ctx:
+                _load_findings_for_requirement_checks(
+                    str(tenant.id),
+                    str(scan.id),
+                    ["aws_check_prefetch"],
+                    mock_provider,
+                )
+
+        # Expected: a small constant number of queries irrespective of N.
+        # Pre-fix this would be ~1 + 2*N. We give some slack for RLS SET
+        # LOCAL statements that the rls_transaction emits.
+        assert len(ctx.captured_queries) < N, (
+            f"Expected O(1) queries with prefetch_related; got "
+            f"{len(ctx.captured_queries)} for N={N} (N+1 regression?)"
+        )
+
+    def test_max_findings_per_check_cap(self, tenants_fixture, scans_fixture):
+        """When a check exceeds ``MAX_FINDINGS_PER_CHECK``, only ``cap`` rows
+        are loaded AND ``total_counts_out`` reports the pre-cap total.
+
+        Guards the PROWLER-1733 truncation knob: prevents both runaway memory
+        and silent data loss in the PDF (the banner relies on knowing the
+        real total).
+        """
+        from unittest.mock import patch as _patch
+
+        tenant = tenants_fixture[0]
+        scan = scans_fixture[0]
+
+        # Create 12 findings for a single check; cap to 5.
+        check_id = "aws_check_cap_test"
+        for i in range(12):
+            finding = Finding.objects.create(
+                tenant_id=tenant.id,
+                scan=scan,
+                uid=f"f-cap-{i:02d}",
+                check_id=check_id,
+                status=StatusChoices.FAIL,
+                severity=Severity.high,
+                impact=Severity.high,
+                check_metadata={},
+                raw_result={},
+            )
+            resource = Resource.objects.create(
+                tenant_id=tenant.id,
+                provider=scan.provider,
+                uid=f"r-cap-{i:02d}",
+                name=f"r-cap-{i:02d}",
+                metadata="{}",
+                details="",
+                region="us-east-1",
+                service="s",
+                type="t::r",
+            )
+            ResourceFindingMapping.objects.create(
+                tenant_id=tenant.id, finding=finding, resource=resource
+            )
+
+        mock_provider = Mock(type="aws")
+        mock_provider.identity.account = "test"
+
+        totals: dict = {}
+        # Patch the cap to a small value AND skip the heavy transform so we
+        # only assert on row counts and totals.
+        with (
+            _patch("tasks.jobs.threatscore_utils.MAX_FINDINGS_PER_CHECK", 5),
+            _patch(
+                "tasks.jobs.threatscore_utils.FindingOutput.transform_api_finding",
+                side_effect=lambda model, provider: Mock(check_id=model.check_id),
+            ),
+        ):
+            result = _load_findings_for_requirement_checks(
+                str(tenant.id),
+                str(scan.id),
+                [check_id],
+                mock_provider,
+                total_counts_out=totals,
+            )
+
+        assert len(result[check_id]) == 5, (
+            f"cap=5 should yield exactly 5 loaded findings, got {len(result[check_id])}"
+        )
+        assert totals[check_id] == 12, (
+            f"total_counts_out should report the pre-cap total (12), got {totals[check_id]}"
+        )
+
+    def test_only_failed_findings_pushes_down_to_sql(
+        self, tenants_fixture, scans_fixture
+    ):
+        """When ``only_failed_findings=True``, PASS rows are excluded by the
+        DB filter, not just visually hidden afterwards.
+
+        Regression for the consistency fix: previously the requirement-level
+        ``only_failed`` flag filtered which requirements appeared, but inside
+        each rendered requirement the table still showed PASS rows mixed
+        with FAIL, which combined with ``MAX_FINDINGS_PER_CHECK`` could
+        truncate to 1000 PASS findings and hide the actual failure.
+        """
+        from unittest.mock import patch as _patch
+
+        tenant = tenants_fixture[0]
+        scan = scans_fixture[0]
+        check_id = "aws_check_only_failed_test"
+
+        # Mix PASS and FAIL so the filter has something to drop.
+        for i in range(6):
+            status = StatusChoices.FAIL if i % 2 == 0 else StatusChoices.PASS
+            finding = Finding.objects.create(
+                tenant_id=tenant.id,
+                scan=scan,
+                uid=f"f-of-{i:02d}",
+                check_id=check_id,
+                status=status,
+                severity=Severity.high,
+                impact=Severity.high,
+                check_metadata={},
+                raw_result={},
+            )
+            resource = Resource.objects.create(
+                tenant_id=tenant.id,
+                provider=scan.provider,
+                uid=f"r-of-{i:02d}",
+                name=f"r-of-{i:02d}",
+                metadata="{}",
+                details="",
+                region="us-east-1",
+                service="s",
+                type="t::r",
+            )
+            ResourceFindingMapping.objects.create(
+                tenant_id=tenant.id, finding=finding, resource=resource
+            )
+
+        mock_provider = Mock(type="aws")
+        mock_provider.identity.account = "test"
+
+        totals: dict = {}
+        with _patch(
+            "tasks.jobs.threatscore_utils.FindingOutput.transform_api_finding",
+            side_effect=lambda model, provider: Mock(
+                check_id=model.check_id, status=model.status
+            ),
+        ):
+            result = _load_findings_for_requirement_checks(
+                str(tenant.id),
+                str(scan.id),
+                [check_id],
+                mock_provider,
+                total_counts_out=totals,
+                only_failed_findings=True,
+            )
+
+        # 3 FAIL + 3 PASS in DB; FAIL-only filter should load just 3.
+        loaded = result[check_id]
+        assert len(loaded) == 3, f"expected 3 FAIL findings, got {len(loaded)}"
+        statuses = {getattr(f, "status", None) for f in loaded}
+        assert statuses == {StatusChoices.FAIL}, (
+            f"expected all loaded findings to be FAIL; got statuses {statuses}"
+        )
+        # total_counts must reflect the FAIL-only total, not the global total.
+        assert totals[check_id] == 3, (
+            f"total_counts should be FAIL-only (3), got {totals[check_id]}"
+        )
+
+    def test_max_findings_per_check_disabled(self, tenants_fixture, scans_fixture):
+        """``MAX_FINDINGS_PER_CHECK=0`` disables the cap; load all rows."""
+        from unittest.mock import patch as _patch
+
+        tenant = tenants_fixture[0]
+        scan = scans_fixture[0]
+
+        check_id = "aws_check_uncapped"
+        for i in range(8):
+            f = Finding.objects.create(
+                tenant_id=tenant.id,
+                scan=scan,
+                uid=f"f-unc-{i:02d}",
+                check_id=check_id,
+                status=StatusChoices.FAIL,
+                severity=Severity.high,
+                impact=Severity.high,
+                check_metadata={},
+                raw_result={},
+            )
+            r = Resource.objects.create(
+                tenant_id=tenant.id,
+                provider=scan.provider,
+                uid=f"r-unc-{i:02d}",
+                name=f"r-unc-{i:02d}",
+                metadata="{}",
+                details="",
+                region="us-east-1",
+                service="s",
+                type="t::r",
+            )
+            ResourceFindingMapping.objects.create(
+                tenant_id=tenant.id, finding=f, resource=r
+            )
+
+        mock_provider = Mock(type="aws")
+        mock_provider.identity.account = "test"
+        totals: dict = {}
+        with (
+            _patch("tasks.jobs.threatscore_utils.MAX_FINDINGS_PER_CHECK", 0),
+            _patch(
+                "tasks.jobs.threatscore_utils.FindingOutput.transform_api_finding",
+                side_effect=lambda model, provider: Mock(check_id=model.check_id),
+            ),
+        ):
+            result = _load_findings_for_requirement_checks(
+                str(tenant.id),
+                str(scan.id),
+                [check_id],
+                mock_provider,
+                total_counts_out=totals,
+            )
+
+        assert len(result[check_id]) == 8
+        assert totals[check_id] == 8
 
 
 class TestCleanupStaleTmpOutputDirectories:
@@ -729,23 +1082,24 @@ class TestStaleCleanupProtectionHelpers:
 
 
 @pytest.mark.django_db
+@pytest.mark.usefixtures("patch_report_rendering")
 class TestGenerateThreatscoreReportFunction:
     """Test suite for generate_threatscore_report function."""
 
-    @patch("tasks.jobs.reports.base.initialize_prowler_provider")
+    @patch("tasks.jobs.reports.base.build_provider_metadata")
     def test_generate_threatscore_report_exception_handling(
         self,
-        mock_initialize_provider,
+        mock_build_provider_metadata,
         tenants_fixture,
         scans_fixture,
-        providers_fixture,
+        aws_provider,
     ):
         """Test that exceptions during report generation are properly handled."""
         tenant = tenants_fixture[0]
         scan = scans_fixture[0]
-        provider = providers_fixture[0]
+        provider = aws_provider
 
-        mock_initialize_provider.side_effect = Exception("Test exception")
+        mock_build_provider_metadata.side_effect = Exception("Test exception")
 
         with pytest.raises(Exception) as exc_info:
             generate_threatscore_report(
@@ -760,6 +1114,7 @@ class TestGenerateThreatscoreReportFunction:
 
 
 @pytest.mark.django_db
+@pytest.mark.usefixtures("patch_report_rendering")
 class TestGenerateComplianceReportsOptimized:
     """Test suite for generate_compliance_reports function."""
 
@@ -775,12 +1130,12 @@ class TestGenerateComplianceReportsOptimized:
         mock_upload,
         tenants_fixture,
         scans_fixture,
-        providers_fixture,
+        aws_provider,
     ):
         """Test that function returns early when scan has no findings."""
         tenant = tenants_fixture[0]
         scan = scans_fixture[0]
-        provider = providers_fixture[0]
+        provider = aws_provider
 
         result = generate_compliance_reports(
             tenant_id=str(tenant.id),
@@ -832,14 +1187,14 @@ class TestGenerateComplianceReportsOptimized:
         mock_upload,
         tenants_fixture,
         scans_fixture,
-        providers_fixture,
+        aws_provider,
     ):
         """Scan with no findings and ``generate_cis=True`` must yield a flat
         ``{"upload": False, "path": ""}`` entry, consistent with the other
         frameworks (no nested dict, no sentinel keys)."""
         tenant = tenants_fixture[0]
         scan = scans_fixture[0]
-        provider = providers_fixture[0]
+        provider = aws_provider
 
         result = generate_compliance_reports(
             tenant_id=str(tenant.id),
@@ -854,6 +1209,179 @@ class TestGenerateComplianceReportsOptimized:
 
         assert result["cis"] == {"upload": False, "path": ""}
         mock_cis.assert_not_called()
+
+    @patch("tasks.jobs.report.rmtree")
+    @patch("tasks.jobs.report._upload_to_s3")
+    @patch("tasks.jobs.report.generate_cis_report")
+    @patch("tasks.jobs.report.generate_csa_report")
+    @patch("tasks.jobs.report.generate_nis2_report")
+    @patch("tasks.jobs.report.generate_ens_report")
+    @patch("tasks.jobs.report.generate_threatscore_report")
+    @patch("tasks.jobs.report._generate_compliance_output_directory")
+    @patch("tasks.jobs.report._aggregate_requirement_statistics_from_database")
+    @patch("tasks.jobs.report.Compliance.get_bulk")
+    @patch("tasks.jobs.report.Provider.objects.get")
+    @patch("tasks.jobs.report.ScanSummary.objects.filter")
+    def test_findings_cache_eviction_after_framework(
+        self,
+        mock_scan_summary_filter,
+        mock_provider_get,
+        mock_get_bulk,
+        mock_aggregate_stats,
+        mock_generate_output_dir,
+        mock_threatscore,
+        mock_ens,
+        mock_nis2,
+        mock_csa,
+        mock_cis,
+        mock_upload_to_s3,
+        mock_rmtree,
+    ):
+        """After each framework finishes, exclusive entries are evicted.
+
+        Threat scenario for PROWLER-1733: the shared ``findings_cache`` used
+        to grow monotonically through all 5 frameworks. With the new
+        eviction logic, check_ids only used by ThreatScore are dropped when
+        ThreatScore finishes, before ENS runs.
+        """
+        from types import SimpleNamespace
+
+        from tasks.jobs import report as report_mod
+
+        mock_scan_summary_filter.return_value.exists.return_value = True
+        mock_provider_get.return_value = Mock(uid="provider-uid", provider="aws")
+        # ThreatScore consumes {tsc_only, shared}; ENS consumes {ens_only,
+        # shared}. After ThreatScore evicts, tsc_only must be gone but
+        # shared and ens_only must remain.
+        mock_get_bulk.return_value = {
+            "prowler_threatscore_aws": SimpleNamespace(
+                Requirements=[SimpleNamespace(Checks=["tsc_only", "shared"])]
+            ),
+            "ens_rd2022_aws": SimpleNamespace(
+                Requirements=[SimpleNamespace(Checks=["ens_only", "shared"])]
+            ),
+        }
+        mock_aggregate_stats.return_value = {}
+        mock_generate_output_dir.return_value = "/tmp/tenant/scan/x/prowler-out"
+        mock_upload_to_s3.return_value = "s3://bucket/tenant/scan/x/report.pdf"
+
+        # Seed the cache as if both frameworks had already loaded their
+        # findings. We mutate it indirectly: each generator wrapper is a
+        # Mock: make ThreatScore populate the cache, and have ENS observe
+        # the state at call time so we can introspect post-eviction.
+        observed_state: dict = {}
+
+        def _threatscore_side_effect(**kwargs):
+            cache = kwargs["findings_cache"]
+            cache["tsc_only"] = ["tsc-finding"]
+            cache["shared"] = ["shared-finding"]
+
+        def _ens_side_effect(**kwargs):
+            # ENS runs AFTER threatscore's _evict_after_framework("threatscore").
+            observed_state["cache_keys_when_ens_runs"] = set(
+                kwargs["findings_cache"].keys()
+            )
+            kwargs["findings_cache"]["ens_only"] = ["ens-finding"]
+
+        mock_threatscore.side_effect = _threatscore_side_effect
+        mock_ens.side_effect = _ens_side_effect
+
+        report_mod.generate_compliance_reports(
+            tenant_id=str(uuid.uuid4()),
+            scan_id=str(uuid.uuid4()),
+            provider_id=str(uuid.uuid4()),
+            generate_threatscore=True,
+            generate_ens=True,
+            generate_nis2=False,
+            generate_csa=False,
+            generate_cis=False,
+        )
+
+        # ``tsc_only`` was exclusive to ThreatScore → evicted before ENS ran.
+        # ``shared`` is still pending for ENS → must remain.
+        assert "tsc_only" not in observed_state["cache_keys_when_ens_runs"], (
+            "tsc_only should have been evicted before ENS ran"
+        )
+        assert "shared" in observed_state["cache_keys_when_ens_runs"], (
+            "shared must remain in cache because ENS still needs it"
+        )
+
+    @patch("tasks.jobs.report.build_provider_metadata")
+    @patch("tasks.jobs.report.rmtree")
+    @patch("tasks.jobs.report._upload_to_s3")
+    @patch("tasks.jobs.report.generate_cis_report")
+    @patch("tasks.jobs.report.generate_csa_report")
+    @patch("tasks.jobs.report.generate_nis2_report")
+    @patch("tasks.jobs.report.generate_ens_report")
+    @patch("tasks.jobs.report.generate_threatscore_report")
+    @patch("tasks.jobs.report._generate_compliance_output_directory")
+    @patch("tasks.jobs.report._aggregate_requirement_statistics_from_database")
+    @patch("tasks.jobs.report.Compliance.get_bulk")
+    @patch("tasks.jobs.report.Provider.objects.get")
+    @patch("tasks.jobs.report.ScanSummary.objects.filter")
+    def test_provider_metadata_built_once(
+        self,
+        mock_scan_summary_filter,
+        mock_provider_get,
+        mock_get_bulk,
+        mock_aggregate_stats,
+        mock_generate_output_dir,
+        mock_threatscore,
+        mock_ens,
+        mock_nis2,
+        mock_csa,
+        mock_cis,
+        mock_upload_to_s3,
+        mock_rmtree,
+        mock_build_metadata,
+    ):
+        """``build_provider_metadata`` must be called exactly once for the
+        whole batch and its result shared across all 5 reports
+        (PROWLER-1733 / PROWLER-2145).
+        """
+        mock_scan_summary_filter.return_value.exists.return_value = True
+        mock_provider_get.return_value = Mock(uid="provider-uid", provider="aws")
+        # CIS variant discovery needs at least one cis_* key.
+        mock_get_bulk.return_value = {"cis_6.0_aws": Mock()}
+        mock_aggregate_stats.return_value = {}
+        mock_generate_output_dir.return_value = "/tmp/tenant/scan/x/prowler-out"
+        mock_upload_to_s3.return_value = "s3://bucket/tenant/scan/x/report.pdf"
+        mock_build_metadata.return_value = Mock(name="prowler_provider")
+
+        generate_compliance_reports(
+            tenant_id=str(uuid.uuid4()),
+            scan_id=str(uuid.uuid4()),
+            provider_id=str(uuid.uuid4()),
+            generate_threatscore=True,
+            generate_ens=True,
+            generate_nis2=True,
+            generate_csa=True,
+            generate_cis=True,
+        )
+
+        # All 5 wrappers were invoked once each…
+        mock_threatscore.assert_called_once()
+        mock_ens.assert_called_once()
+        mock_nis2.assert_called_once()
+        mock_csa.assert_called_once()
+        mock_cis.assert_called_once()
+        # …but the provider metadata stub was built only once.
+        assert mock_build_metadata.call_count == 1, (
+            f"expected 1 build, got {mock_build_metadata.call_count} "
+            f"(prowler_provider must be shared across reports)"
+        )
+
+        # The shared instance must reach every wrapper as kwargs.
+        shared = mock_build_metadata.return_value
+        for mock_wrapper in (
+            mock_threatscore,
+            mock_ens,
+            mock_nis2,
+            mock_csa,
+            mock_cis,
+        ):
+            _, call_kwargs = mock_wrapper.call_args
+            assert call_kwargs.get("prowler_provider") is shared
 
     @patch("tasks.jobs.report.rmtree")
     @patch("tasks.jobs.report._upload_to_s3")
@@ -954,6 +1482,7 @@ class TestGenerateComplianceReportsOptimized:
 
 
 @pytest.mark.django_db
+@pytest.mark.usefixtures("patch_report_rendering")
 class TestGenerateComplianceReportsCIS:
     """Test suite covering the CIS branch of generate_compliance_reports."""
 
@@ -983,7 +1512,7 @@ class TestGenerateComplianceReportsCIS:
         monkeypatch,
         tenants_fixture,
         scans_fixture,
-        providers_fixture,
+        aws_provider,
     ):
         """CIS branch should generate a single PDF for the highest version.
 
@@ -993,7 +1522,7 @@ class TestGenerateComplianceReportsCIS:
         """
         tenant = tenants_fixture[0]
         scan = scans_fixture[0]
-        provider = providers_fixture[0]
+        provider = aws_provider
 
         self._force_scan_has_findings(monkeypatch)
 
@@ -1042,12 +1571,12 @@ class TestGenerateComplianceReportsCIS:
         monkeypatch,
         tenants_fixture,
         scans_fixture,
-        providers_fixture,
+        aws_provider,
     ):
         """A failure in the latest CIS variant must be surfaced in the flat results entry."""
         tenant = tenants_fixture[0]
         scan = scans_fixture[0]
-        provider = providers_fixture[0]
+        provider = aws_provider
 
         self._force_scan_has_findings(monkeypatch)
 
@@ -1089,14 +1618,14 @@ class TestGenerateComplianceReportsCIS:
         monkeypatch,
         tenants_fixture,
         scans_fixture,
-        providers_fixture,
+        aws_provider,
     ):
         """When ``Compliance.get_bulk`` returns no CIS entry the CIS branch
         must skip cleanly and record a flat ``{"upload": False, "path": ""}``
         entry — no hard-coded provider whitelist is consulted."""
         tenant = tenants_fixture[0]
         scan = scans_fixture[0]
-        provider = providers_fixture[0]
+        provider = aws_provider
 
         self._force_scan_has_findings(monkeypatch)
         mock_stats.return_value = {}
@@ -1128,12 +1657,12 @@ class TestGenerateComplianceReportsCIS:
         monkeypatch,
         tenants_fixture,
         scans_fixture,
-        providers_fixture,
+        aws_provider,
     ):
         """CIS output dir errors must be captured in results (not raised)."""
         tenant = tenants_fixture[0]
         scan = scans_fixture[0]
-        provider = providers_fixture[0]
+        provider = aws_provider
 
         self._force_scan_has_findings(monkeypatch)
         mock_stats.return_value = {}
@@ -1153,6 +1682,78 @@ class TestGenerateComplianceReportsCIS:
 
         assert result["cis"]["upload"] is False
         assert result["cis"]["error"] == "dir boom"
+
+    @patch("tasks.jobs.report._aggregate_requirement_statistics_from_database")
+    @patch("tasks.jobs.report._generate_compliance_output_directory")
+    @patch("tasks.jobs.report.Compliance.get_bulk")
+    def test_output_directory_failures_are_grouped_per_errno(
+        self,
+        mock_get_bulk,
+        mock_generate_output_dir,
+        mock_stats,
+        monkeypatch,
+        caplog,
+        tenants_fixture,
+        scans_fixture,
+        aws_provider,
+    ):
+        """A full disk and a missing mount point must not share a Sentry issue.
+
+        Both are OSError raised from the same ``os.makedirs`` call, so they only
+        stay apart if the exception reaches ``before_send``, which fingerprints
+        it by errno.
+        """
+        tenant = tenants_fixture[0]
+        scan = scans_fixture[0]
+        provider = aws_provider
+
+        self._force_scan_has_findings(monkeypatch)
+        mock_stats.return_value = {}
+        mock_get_bulk.return_value = {"cis_5.0_aws": Mock()}
+
+        fingerprints = []
+        for error_number, message in (
+            (errno.ENOSPC, "No space left on device: '/tmp/prowler_api_output'"),
+            (errno.ENOENT, "No such file or directory: '/mnt/output'"),
+        ):
+            mock_generate_output_dir.side_effect = OSError(error_number, message)
+            caplog.clear()
+
+            with caplog.at_level(logging.ERROR, logger="tasks.jobs.report"):
+                generate_compliance_reports(
+                    tenant_id=str(tenant.id),
+                    scan_id=str(scan.id),
+                    provider_id=str(provider.id),
+                    generate_threatscore=False,
+                    generate_ens=False,
+                    generate_nis2=False,
+                    generate_csa=False,
+                    generate_cis=True,
+                )
+
+            record = next(
+                record
+                for record in caplog.records
+                if "Error generating output directory" in record.getMessage()
+            )
+            # Without exc_info the Sentry event carries no exception at all and
+            # nothing can tell the two failures apart.
+            assert record.exc_info is not None
+            # The category is what scopes the errno fingerprint to this record.
+            assert (
+                getattr(record, ERROR_CATEGORY_ATTRIBUTE, None)
+                == FILESYSTEM_ERROR_CATEGORY
+            )
+
+            # Same hint the Sentry logging integration builds for this record.
+            event = {}
+            before_send(event, {"log_record": record, "exc_info": record.exc_info})
+            fingerprints.append(event["fingerprint"])
+
+        assert fingerprints == [
+            ["{{ default }}", "errno:ENOSPC"],
+            ["{{ default }}", "errno:ENOENT"],
+        ]
 
 
 class TestPickLatestCisVariant:

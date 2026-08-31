@@ -1,6 +1,10 @@
 import { Locator, Page, expect, request } from "@playwright/test";
-import { AWSProviderCredential, AWSProviderData, AWS_CREDENTIAL_OPTIONS, ProvidersPage } from "./providers/providers-page";
-import { ScansPage } from "./scans/scans-page";
+import {
+  AWSProviderCredential,
+  AWSProviderData,
+  AWS_CREDENTIAL_OPTIONS,
+  ProvidersPage,
+} from "./providers/providers-page";
 
 export const ERROR_MESSAGES = {
   INVALID_CREDENTIALS: "Invalid email or password",
@@ -70,7 +74,6 @@ export async function verifySessionValid(page: Page) {
   return session;
 }
 
-
 export async function addAWSProvider(
   page: Page,
   accountId: string,
@@ -119,70 +122,62 @@ export async function addAWSProvider(
   await providersPage.fillStaticCredentials(staticCredentials);
   await providersPage.clickNext();
 
-  // Launch scan
-  await providersPage.verifyLaunchScanPageLoaded();
-  await providersPage.clickNext();
-
-  // Wait for redirect to provider page
-  const scansPage = new ScansPage(page);
-  await scansPage.verifyPageLoaded();
+  // Scans specs launch their own scan. The setup helper should only leave a
+  // connected provider behind so the suite does not spend CI capacity on a
+  // duplicate preparatory scan.
+  await providersPage.completeProviderConnectionWithoutLaunchingScan(accountId);
 }
 
-export async function deleteProviderIfExists(page: ProvidersPage, providerUID: string): Promise<void> {
-  // Delete the provider if it exists
+/**
+ * Finds a provider after the filtered providers page reaches a loaded state.
+ * The loading skeleton also renders a table, so table visibility alone cannot
+ * prove that provider data is ready.
+ */
+async function findProviderRow(
+  page: ProvidersPage,
+  providerUID: string,
+): Promise<Locator | null> {
+  await page.page.goto(
+    `/providers?filter%5Bsearch%5D=${encodeURIComponent(providerUID)}`,
+  );
 
-  // Navigate to providers page
-  await page.goto();
-  await expect(page.providersTable).toBeVisible({ timeout: 10000 });
+  const providerRow = page.providersTable
+    .getByRole("row")
+    .filter({ hasText: providerUID })
+    .first();
+  const noResults = page.providersTable.getByRole("cell", {
+    name: "No results.",
+    exact: true,
+  });
+  const emptyState = page.page.getByRole("region", {
+    name: /no providers configured/i,
+  });
 
-  const allRows = page.providersTable.locator("tbody tr");
+  await expect(providerRow.or(noResults).or(emptyState)).toBeVisible({
+    timeout: 10000,
+  });
 
-  const isNoResultsRow = async (row: Locator): Promise<boolean> => {
-    const text = await row.textContent();
-    return text?.includes("No results") || text?.includes("No data") || false;
-  };
+  if (await providerRow.isVisible().catch(() => false)) {
+    return providerRow;
+  }
 
-  const findProviderRow = async (): Promise<Locator | null> => {
-    const rowByText = page.providersTable
-      .locator("tbody tr")
-      .filter({ hasText: providerUID })
-      .first();
-    if (await rowByText.isVisible().catch(() => false)) {
-      return rowByText;
-    }
+  return null;
+}
 
-    const count = await allRows.count();
-    for (let i = 0; i < count; i++) {
-      const row = allRows.nth(i);
-      if (await isNoResultsRow(row)) {
-        continue;
-      }
-      const rowText = await row.textContent();
-      if (rowText?.includes(providerUID)) {
-        return row;
-      }
-    }
-
-    return null;
-  };
-
+export async function deleteProviderIfExists(
+  page: ProvidersPage,
+  providerUID: string,
+): Promise<void> {
   // Find the provider row
-  const targetRow = await findProviderRow();
+  const targetRow = await findProviderRow(page, providerUID);
 
   if (!targetRow) {
     // Provider not found, nothing to delete
-    // Navigate back to providers page to ensure clean state
-    await page.goto();
-    await expect(page.providersTable).toBeVisible({ timeout: 10000 });
     return;
   }
 
   // Find and click the action button (last cell = actions column)
-  const actionButton = targetRow
-    .locator("td")
-    .last()
-    .locator("button")
-    .first();
+  const actionButton = targetRow.locator("td").last().locator("button").first();
 
   // Ensure the button is in view before clicking (handles horizontal scroll)
   await actionButton.scrollIntoViewIfNeeded();
@@ -198,9 +193,13 @@ export async function deleteProviderIfExists(page: ProvidersPage, providerUID: s
   await expect(deleteMenuItem).toBeVisible({ timeout: 5000 });
   await deleteMenuItem.click();
 
-  // Wait for confirmation modal to appear
+  // Wait for confirmation modal to appear. Exclude the Next.js dev error
+  // overlay, which is also role="dialog" and would otherwise be matched first,
+  // making the assertion wait on the wrong (hidden) element.
   const modal = page.page
-    .locator('[role="dialog"], .modal, [data-testid*="modal"]')
+    .locator(
+      '[role="dialog"]:not([data-nextjs-dialog="true"]), .modal, [data-testid*="modal"]',
+    )
     .first();
 
   await expect(modal).toBeVisible({ timeout: 10000 });
@@ -214,7 +213,17 @@ export async function deleteProviderIfExists(page: ProvidersPage, providerUID: s
   // Wait for modal to close (this indicates deletion was initiated)
   await expect(modal).not.toBeVisible({ timeout: 10000 });
 
-  // Navigate back to providers page to ensure clean state
-  await page.goto();
-  await expect(page.providersTable).toBeVisible({ timeout: 10000 });
+  // The success notification is shown only after the delete request completes.
+  await expect(
+    page.page.getByText("The provider was removed successfully.", {
+      exact: true,
+    }),
+  ).toBeVisible({ timeout: 10000 });
+
+  // Reload a server-filtered view and prove the provider no longer exists.
+  const deletedProviderRow = await findProviderRow(page, providerUID);
+  expect(
+    deletedProviderRow,
+    `Provider ${providerUID} still exists after deletion`,
+  ).toBeNull();
 }

@@ -8,6 +8,15 @@ from prowler.lib.logger import logger
 from prowler.providers.m365.lib.service.service import M365Service
 from prowler.providers.m365.m365_provider import M365Provider
 
+SYSTEM_MAILBOX_TYPES = {
+    "DiscoveryMailbox",
+    "ArbitrationMailbox",
+    "AuditLogMailbox",
+    "MonitoringMailbox",
+    "AuxAuditLogMailbox",
+    "SystemMailbox",
+}
+
 
 class Exchange(M365Service):
     """
@@ -34,6 +43,8 @@ class Exchange(M365Service):
         self.role_assignment_policies = []
         self.mailbox_audit_properties = []
         self.shared_mailboxes = []
+        self.application_access_policies = None
+        self.mailboxes = None
 
         if self.powershell:
             if self.powershell.connect_exchange_online():
@@ -46,6 +57,10 @@ class Exchange(M365Service):
                 self.role_assignment_policies = self._get_role_assignment_policies()
                 self.mailbox_audit_properties = self._get_mailbox_audit_properties()
                 self.shared_mailboxes = self._get_shared_mailboxes()
+                self.application_access_policies = (
+                    self._get_application_access_policies()
+                )
+                self.mailboxes = self._get_mailboxes()
             self.powershell.close()
 
         # Fetch license count via Graph API
@@ -93,6 +108,16 @@ class Exchange(M365Service):
             return None
 
     def _get_organization_config(self):
+        """Retrieve the Exchange Online organization configuration.
+
+        Reads Get-OrganizationConfig via Exchange Online PowerShell. Boolean
+        properties that can come back null (never configured) are normalized to
+        their platform defaults, e.g. RejectDirectSend to False.
+
+        Returns:
+            Optional[Organization]: The parsed organization configuration, or
+            None when unavailable or on error.
+        """
         logger.info("Microsoft365 - Getting Exchange Organization configuration...")
         organization_config = None
         try:
@@ -122,6 +147,12 @@ class Exchange(M365Service):
                     delayed_delicensing_enabled=organization_configuration.get(
                         "DelayedDelicensingEnabled", False
                     ),
+                    # Can be null on tenants where the setting was never
+                    # configured; null keeps the platform default (disabled).
+                    reject_direct_send=organization_configuration.get(
+                        "RejectDirectSend"
+                    )
+                    is True,
                 )
         except Exception as error:
             logger.error(
@@ -226,6 +257,15 @@ class Exchange(M365Service):
         return transport_config
 
     def _get_mailbox_policy(self):
+        """Retrieve the OWA mailbox policies.
+
+        Reads Get-OwaMailboxPolicy via Exchange Online PowerShell. The personal
+        account properties can come back null (never configured) and are
+        normalized to their platform defaults (enabled).
+
+        Returns:
+            List[MailboxPolicy]: The parsed OWA mailbox policies, empty on error.
+        """
         logger.info("Microsoft365 - Getting mailbox policy configuration...")
         mailbox_policies = []
         try:
@@ -241,6 +281,18 @@ class Exchange(M365Service):
                                 additional_storage_enabled=policy.get(
                                     "AdditionalStorageProvidersAvailable", True
                                 ),
+                                # These properties can be null on tenants where the
+                                # setting was never configured; null keeps the
+                                # platform default.
+                                is_default=policy.get("IsDefault") is True,
+                                personal_accounts_enabled=policy.get(
+                                    "PersonalAccountsEnabled"
+                                )
+                                is not False,
+                                personal_account_calendars_enabled=policy.get(
+                                    "PersonalAccountCalendarsEnabled"
+                                )
+                                is not False,
                             )
                         )
         except Exception as error:
@@ -355,6 +407,97 @@ class Exchange(M365Service):
             )
         return shared_mailboxes
 
+    def _get_application_access_policies(self):
+        """
+        Get Exchange Online Application Access Policies.
+
+        Returns:
+            Optional[list[ApplicationAccessPolicy]]: List of application access
+            policies, or None if the PowerShell command failed.
+        """
+        logger.info("Microsoft365 - Getting application access policies...")
+
+        application_access_policies = []
+
+        try:
+            policies_data = self.powershell.get_application_access_policies()
+
+            if not policies_data:
+                return application_access_policies
+
+            if isinstance(policies_data, dict):
+                policies_data = [policies_data]
+
+            for policy in policies_data:
+                if policy:
+                    application_access_policies.append(
+                        ApplicationAccessPolicy(
+                            identity=policy.get("Identity", ""),
+                            app_id=policy.get("AppId", ""),
+                            access_right=policy.get(
+                                "AccessRight",
+                                "",
+                            ),
+                            description=policy.get(
+                                "Description",
+                                "",
+                            ),
+                        )
+                    )
+
+        except Exception as error:
+            logger.error(
+                f"{error.__class__.__name__}"
+                f"[{error.__traceback__.tb_lineno}]: {error}"
+            )
+            return None
+
+        return application_access_policies
+
+    def _get_mailboxes(self) -> Optional[list["Mailbox"]]:
+        """
+        Get all recipient-facing mailboxes from Exchange Online.
+
+        Retrieves mailboxes of types UserMailbox, SharedMailbox, RoomMailbox
+        and EquipmentMailbox. System-managed mailbox types are excluded as
+        they are controlled by Microsoft and are not subject to domain policy.
+
+        Returns:
+            list[Mailbox]: List of mailboxes with their primary SMTP address
+                and recipient type details. Returns ``None`` when the
+                underlying PowerShell cmdlet raises, so callers can
+                distinguish "PowerShell unavailable" from "empty tenant".
+        """
+        logger.info("Microsoft365 - Getting mailboxes...")
+        mailboxes = []
+        try:
+            mailboxes_data = self.powershell.get_mailboxes()
+            if not mailboxes_data:
+                return mailboxes
+            # PowerShell can return a single dict instead of a list when only
+            # one result is returned; normalize to a list for uniform handling.
+            if isinstance(mailboxes_data, dict):
+                mailboxes_data = [mailboxes_data]
+            for mailbox in mailboxes_data:
+                if mailbox:
+                    recipient_type = mailbox.get("RecipientTypeDetails", "")
+                    if recipient_type in SYSTEM_MAILBOX_TYPES:
+                        continue
+                    mailboxes.append(
+                        Mailbox(
+                            identity=mailbox.get("Identity", ""),
+                            name=mailbox.get("DisplayName", ""),
+                            primary_smtp_address=mailbox.get("PrimarySmtpAddress", ""),
+                            recipient_type_details=recipient_type,
+                        )
+                    )
+            return mailboxes
+        except Exception as error:
+            logger.error(
+                f"{error.__class__.__name__}[{error.__traceback__.tb_lineno}]: {error}"
+            )
+            return None
+
 
 class Organization(BaseModel):
     """
@@ -383,6 +526,7 @@ class Organization(BaseModel):
     mailtips_large_audience_threshold: int
     delayed_delicensing_enabled: bool = False
     total_paid_licenses: Optional[int] = None
+    reject_direct_send: bool = False
 
 
 class MailboxAuditConfig(BaseModel):
@@ -410,6 +554,9 @@ class TransportConfig(BaseModel):
 class MailboxPolicy(BaseModel):
     id: str
     additional_storage_enabled: bool
+    is_default: bool = False
+    personal_accounts_enabled: bool = True
+    personal_account_calendars_enabled: bool = True
 
 
 class RoleAssignmentPolicy(BaseModel):
@@ -497,3 +644,33 @@ class SharedMailbox(BaseModel):
     user_principal_name: str
     external_directory_object_id: str
     identity: str
+
+
+class ApplicationAccessPolicy(BaseModel):
+    """
+    Model for Exchange Online Application Access Policy.
+    """
+
+    identity: str
+    app_id: str
+    access_right: str
+    description: str
+
+
+class Mailbox(BaseModel):
+    """
+    Model for an Exchange Online recipient-facing mailbox.
+
+    Attributes:
+        identity: The unique identity of the mailbox in Exchange.
+        name: Display name of the mailbox.
+        primary_smtp_address: The primary SMTP address used for outbound mail
+            and the From: header. This is the address the check evaluates.
+        recipient_type_details: The mailbox type (e.g., UserMailbox,
+            SharedMailbox, RoomMailbox, EquipmentMailbox).
+    """
+
+    identity: str
+    name: str
+    primary_smtp_address: str
+    recipient_type_details: str

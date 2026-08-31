@@ -75,6 +75,20 @@
         "iam_user_accesskey_unused",
         "iam_user_console_access_unused"
       ],
+      "ConfigRequirements": [
+        {
+          "Check": "iam_user_accesskey_unused",
+          "ConfigKey": "max_unused_access_keys_days",
+          "Operator": "lte",
+          "Value": 45
+        },
+        {
+          "Check": "iam_user_console_access_unused",
+          "ConfigKey": "max_console_access_days",
+          "Operator": "lte",
+          "Value": 45
+        }
+      ],
       "Attributes": [
         {
           "Section": "1 Identity and Access Management",
@@ -264,6 +278,14 @@
       "Description": "Ensure that IAM Access analyzer is enabled for all regions",
       "Checks": [
         "accessanalyzer_enabled"
+      ],
+      "ConfigRequirements": [
+        {
+          "Check": "accessanalyzer_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        }
       ],
       "Attributes": [
         {
@@ -756,6 +778,14 @@
       "Checks": [
         "config_recorder_all_regions_enabled"
       ],
+      "ConfigRequirements": [
+        {
+          "Check": "config_recorder_all_regions_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        }
+      ],
       "Attributes": [
         {
           "Section": "3 Logging",
@@ -1008,6 +1038,14 @@
       "Checks": [
         "securityhub_enabled"
       ],
+      "ConfigRequirements": [
+        {
+          "Check": "securityhub_enabled",
+          "ConfigKey": "mute_non_default_regions",
+          "Operator": "eq",
+          "Value": false
+        }
+      ],
       "Attributes": [
         {
           "Section": "4 Monitoring",
@@ -1220,7 +1258,8 @@
       "Checks": [
         "ec2_securitygroup_allow_ingress_from_internet_to_all_ports",
         "ec2_securitygroup_allow_ingress_from_internet_to_tcp_port_22",
-        "ec2_securitygroup_allow_ingress_from_internet_to_tcp_port_3389"
+        "ec2_securitygroup_allow_ingress_from_internet_to_tcp_port_3389",
+        "ec2_confidential_workload_host_unrestricted_ingress"
       ],
       "Attributes": [
         {
@@ -1243,7 +1282,8 @@
       "Checks": [
         "ec2_securitygroup_allow_ingress_from_internet_to_all_ports",
         "ec2_securitygroup_allow_ingress_from_internet_to_tcp_port_22",
-        "ec2_securitygroup_allow_ingress_from_internet_to_tcp_port_3389"
+        "ec2_securitygroup_allow_ingress_from_internet_to_tcp_port_3389",
+        "ec2_confidential_workload_host_unrestricted_ingress"
       ],
       "Attributes": [
         {
@@ -1306,7 +1346,8 @@
       "Id": "5.6",
       "Description": "Ensure that EC2 Metadata Service only allows IMDSv2",
       "Checks": [
-        "ec2_instance_imdsv2_enabled"
+        "ec2_instance_imdsv2_enabled",
+        "ec2_confidential_workload_host_imdsv2_not_enforced"
       ],
       "Attributes": [
         {

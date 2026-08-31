@@ -82,8 +82,11 @@ class Slack:
                 logo = gcp_logo
             elif provider.type == "azure":
                 printed_subscriptions = []
-                for key, value in provider.identity.subscriptions.items():
-                    intermediate = f"- *{key}: {value}*\n"
+                for (
+                    subscription_id,
+                    display_name,
+                ) in provider.identity.subscriptions.items():
+                    intermediate = f"- *{subscription_id}: {display_name}*\n"
                     printed_subscriptions.append(intermediate)
                 identity = f"Azure Subscriptions:\n{''.join(printed_subscriptions)}"
                 logo = azure_logo
@@ -107,6 +110,20 @@ class Slack:
             list: list of Slack message blocks.
         """
         try:
+            # A scan can legitimately produce no findings, in which case
+            # `findings_count` is 0 and the percentages below would raise
+            # `ZeroDivisionError`.
+            findings_count = stats["findings_count"]
+            pass_percentage = (
+                round(stats["total_pass"] / findings_count * 100, 2)
+                if findings_count
+                else 0
+            )
+            fail_percentage = (
+                round(stats["total_fail"] / findings_count * 100, 2)
+                if findings_count
+                else 0
+            )
             blocks = [
                 {
                     "type": "section",
@@ -125,7 +142,7 @@ class Slack:
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"\n:white_check_mark: *{stats['total_pass']} Passed findings* ({round(stats['total_pass'] / stats['findings_count'] * 100, 2)}%)\n",
+                        "text": f"\n:white_check_mark: *{stats['total_pass']} Passed findings* ({pass_percentage}%)\n",
                     },
                 },
                 {
@@ -145,7 +162,7 @@ class Slack:
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"\n:x: *{stats['total_fail']} Failed findings* ({round(stats['total_fail'] / stats['findings_count'] * 100, 2)}%)\n ",
+                        "text": f"\n:x: *{stats['total_fail']} Failed findings* ({fail_percentage}%)\n ",
                     },
                 },
                 {

@@ -46,6 +46,7 @@ def mock_admincenter_get_organization(_):
         guid="id-1",
         name="Test",
         customer_lockbox_enabled=False,
+        bookings_enabled=False,
     )
 
 
@@ -146,6 +147,7 @@ class Test_AdminCenter_Service:
             assert (
                 admincenter_client.organization_config.customer_lockbox_enabled is False
             )
+            assert admincenter_client.organization_config.bookings_enabled is False
             admincenter_client.powershell.close()
 
     def test_get_sharing_policy(self):
@@ -162,6 +164,70 @@ class Test_AdminCenter_Service:
             assert admincenter_client.sharing_policy.guid == "id-1"
             assert admincenter_client.sharing_policy.name == "Test"
             assert admincenter_client.sharing_policy.enabled is False
+            admincenter_client.powershell.close()
+
+    @patch(
+        "prowler.providers.m365.lib.powershell.m365_powershell.M365PowerShell.get_mailbox_policy",
+        return_value=[
+            {
+                "Id": "OwaMailboxPolicy-Default",
+                "IsDefault": True,
+                "BookingsMailboxCreationEnabled": True,
+            },
+            {
+                "Id": "OwaMailboxPolicy-Custom",
+                "IsDefault": False,
+                "BookingsMailboxCreationEnabled": False,
+            },
+        ],
+    )
+    def test_get_mailbox_policy(self, _mock_get_mailbox_policy):
+        with (
+            mock.patch(
+                "prowler.providers.m365.lib.powershell.m365_powershell.M365PowerShell.connect_exchange_online",
+                return_value=True,
+            ),
+        ):
+            admincenter_client = AdminCenter(
+                set_mocked_m365_provider(
+                    identity=M365IdentityInfo(tenant_domain=DOMAIN)
+                )
+            )
+            mailbox_policies = admincenter_client.mailbox_policies
+            assert len(mailbox_policies) == 2
+            assert mailbox_policies[0].id == "OwaMailboxPolicy-Default"
+            assert mailbox_policies[0].is_default is True
+            assert mailbox_policies[0].bookings_mailbox_creation_enabled is True
+            assert mailbox_policies[1].id == "OwaMailboxPolicy-Custom"
+            assert mailbox_policies[1].is_default is False
+            assert mailbox_policies[1].bookings_mailbox_creation_enabled is False
+            admincenter_client.powershell.close()
+
+    @patch(
+        "prowler.providers.m365.lib.powershell.m365_powershell.M365PowerShell.get_mailbox_policy",
+        return_value={
+            "Id": "OwaMailboxPolicy-Default",
+            "IsDefault": True,
+            "BookingsMailboxCreationEnabled": False,
+        },
+    )
+    def test_get_mailbox_policy_single_dict(self, _mock_get_mailbox_policy):
+        with (
+            mock.patch(
+                "prowler.providers.m365.lib.powershell.m365_powershell.M365PowerShell.connect_exchange_online",
+                return_value=True,
+            ),
+        ):
+            admincenter_client = AdminCenter(
+                set_mocked_m365_provider(
+                    identity=M365IdentityInfo(tenant_domain=DOMAIN)
+                )
+            )
+            mailbox_policies = admincenter_client.mailbox_policies
+            assert len(mailbox_policies) == 1
+            assert mailbox_policies[0].id == "OwaMailboxPolicy-Default"
+            assert mailbox_policies[0].is_default is True
+            assert mailbox_policies[0].bookings_mailbox_creation_enabled is False
             admincenter_client.powershell.close()
 
 
@@ -252,3 +318,49 @@ def test_admincenter__get_groups_maps_group_types():
     assert groups["id-2"].group_types == []
     assert groups["id-3"].group_types == []
     assert groups["id-3"].visibility == "Public"
+
+
+def test_admincenter__get_groups_handles_pagination():
+    admincenter_service = AdminCenter.__new__(AdminCenter)
+
+    groups_response_page_one = SimpleNamespace(
+        value=[
+            SimpleNamespace(
+                id="id-1",
+                display_name="First Unified Group",
+                visibility="Private",
+                group_types=["Unified"],
+            )
+        ],
+        odata_next_link="next-link",
+    )
+    groups_response_page_two = SimpleNamespace(
+        value=[
+            SimpleNamespace(
+                id="id-2",
+                display_name="Second Unified Group",
+                visibility="Public",
+                group_types=["Unified"],
+            )
+        ],
+        odata_next_link=None,
+    )
+
+    groups_with_url_builder = SimpleNamespace(
+        get=AsyncMock(return_value=groups_response_page_two)
+    )
+    with_url_mock = MagicMock(return_value=groups_with_url_builder)
+    groups_builder = SimpleNamespace(
+        get=AsyncMock(return_value=groups_response_page_one),
+        with_url=with_url_mock,
+    )
+    admincenter_service.client = SimpleNamespace(groups=groups_builder)
+
+    groups = asyncio.run(admincenter_service._get_groups())
+
+    assert len(groups) == 2
+    assert groups_builder.get.await_count == 1
+    with_url_mock.assert_called_once_with("next-link")
+    assert groups["id-1"].name == "First Unified Group"
+    assert groups["id-2"].name == "Second Unified Group"
+    assert groups["id-2"].visibility == "Public"

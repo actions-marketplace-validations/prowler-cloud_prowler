@@ -4,11 +4,16 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { DOCS_URLS, getProviderHelpText } from "@/lib/external-urls";
+import { isCloud } from "@/lib/shared/env";
+import { endActiveTour } from "@/lib/tours/use-driver-tour";
+import { useOnboardingCheckpointStore } from "@/store/onboarding-checkpoint";
 import { useOrgSetupStore } from "@/store/organizations/store";
 import { useProviderWizardStore } from "@/store/provider-wizard/store";
 import {
   ORG_SETUP_PHASE,
   ORG_WIZARD_STEP,
+  ORGANIZATION_TYPE,
+  OrgFlowType,
   OrgSetupPhase,
   OrgWizardStep,
 } from "@/types/organizations";
@@ -33,6 +38,12 @@ const WIZARD_VARIANT = {
 
 type WizardVariant = (typeof WIZARD_VARIANT)[keyof typeof WIZARD_VARIANT];
 
+const ORG_DOCS_URL = {
+  [ORGANIZATION_TYPE.AWS]: DOCS_URLS.AWS_ORGANIZATIONS,
+  [ORGANIZATION_TYPE.AZURE]: DOCS_URLS.AZURE_ORGANIZATIONS,
+  [ORGANIZATION_TYPE.GCP]: DOCS_URLS.GCP_ORGANIZATIONS,
+} as const satisfies Record<OrgFlowType, string>;
+
 const EMPTY_FOOTER_CONFIG: WizardFooterConfig = {
   showBack: false,
   backLabel: "Back",
@@ -50,6 +61,8 @@ interface UseProviderWizardControllerProps {
   onOpenChange: (open: boolean) => void;
   initialData?: ProviderWizardInitialData;
   orgInitialData?: OrgWizardInitialData;
+  // When false, skips post-close router.refresh() — caller relies on revalidatePath instead.
+  refreshOnClose?: boolean;
 }
 
 export function useProviderWizardController({
@@ -57,6 +70,7 @@ export function useProviderWizardController({
   onOpenChange,
   initialData,
   orgInitialData,
+  refreshOnClose = true,
 }: UseProviderWizardControllerProps) {
   const router = useRouter();
   const initialProviderId = initialData?.providerId ?? null;
@@ -93,8 +107,14 @@ export function useProviderWizardController({
     setMode,
     mode,
     providerType,
+    via,
   } = useProviderWizardStore();
-  const { reset: resetOrgWizard, setOrganization } = useOrgSetupStore();
+  const {
+    reset: resetOrgWizard,
+    setOrganization,
+    setOrganizationType,
+    organizationType,
+  } = useOrgSetupStore();
 
   useEffect(() => {
     if (!open) {
@@ -110,6 +130,7 @@ export function useProviderWizardController({
     if (orgInitialData) {
       setWizardVariant(WIZARD_VARIANT.ORGANIZATIONS);
       resetOrgWizard();
+      setOrganizationType(orgInitialData.organizationType);
       setOrganization(
         orgInitialData.organizationId,
         orgInitialData.organizationName,
@@ -168,6 +189,7 @@ export function useProviderWizardController({
     resetProviderWizard,
     setMode,
     setOrganization,
+    setOrganizationType,
     setProvider,
     setSecretId,
     setVia,
@@ -176,6 +198,13 @@ export function useProviderWizardController({
   const isOrgDirectEntry = Boolean(orgInitialData);
 
   const handleClose = () => {
+    // Closing the wizard at any point ends the add-provider tour; the checkpoint
+    // logic below still drives the handoff to scans. No-op off-onboarding.
+    endActiveTour();
+
+    // Read providerId before reset clears it — non-null means a provider was connected.
+    const connectedProviderId = useProviderWizardStore.getState().providerId;
+
     resetProviderWizard();
     resetOrgWizard();
     setWizardVariant(WIZARD_VARIANT.PROVIDER);
@@ -185,7 +214,17 @@ export function useProviderWizardController({
     setProviderTypeHint(null);
     setOrgSetupPhase(ORG_SETUP_PHASE.DETAILS);
     onOpenChange(false);
-    router.refresh();
+
+    // Cloud-only; only fires if the store is armed (user started onboarding).
+    if (isCloud()) {
+      useOnboardingCheckpointStore.getState().requestOpenOnWizardClose({
+        providerConnected: connectedProviderId !== null,
+      });
+    }
+
+    if (refreshOnClose) {
+      router.refresh();
+    }
   };
 
   const handleDialogOpenChange = (nextOpen: boolean) => {
@@ -206,8 +245,14 @@ export function useProviderWizardController({
     setCurrentStep(PROVIDER_WIZARD_STEP.LAUNCH);
   };
 
-  const openOrganizationsFlow = () => {
+  const openOrganizationsFlow = (
+    orgType: OrgFlowType = ORGANIZATION_TYPE.AWS,
+  ) => {
+    // Organizations diverges from the credentials path the tour guides toward; end
+    // it so it doesn't dangle on a step that no longer fits. No-op off-onboarding.
+    endActiveTour();
     resetOrgWizard();
+    setOrganizationType(orgType);
     setWizardVariant(WIZARD_VARIANT.ORGANIZATIONS);
     setOrgCurrentStep(ORG_WIZARD_STEP.SETUP);
     setFooterConfig(EMPTY_FOOTER_CONFIG);
@@ -226,8 +271,12 @@ export function useProviderWizardController({
 
   const isProviderFlow = wizardVariant === WIZARD_VARIANT.PROVIDER;
   const docsLink = isProviderFlow
-    ? getProviderHelpText(providerTypeHint ?? providerType ?? "").link
-    : DOCS_URLS.AWS_ORGANIZATIONS;
+    ? getProviderHelpText(
+        providerTypeHint ?? providerType ?? "",
+        currentStep,
+        via,
+      ).link
+    : ORG_DOCS_URL[organizationType];
   const resolvedFooterConfig: WizardFooterConfig = footerConfig;
   const modalTitle = getProviderWizardModalTitle(mode);
 
@@ -243,6 +292,7 @@ export function useProviderWizardController({
     mode,
     modalTitle,
     openOrganizationsFlow,
+    organizationType,
     orgCurrentStep,
     orgSetupPhase,
     providerTypeHint,

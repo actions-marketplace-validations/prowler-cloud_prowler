@@ -2,6 +2,12 @@
 
 import { apiBaseUrl, getAuthHeaders } from "@/lib";
 import { handleApiResponse } from "@/lib/server-actions-helper";
+import type { ApiResult } from "@/types/server-actions";
+
+import type {
+  ComplianceOverviewApiResponse,
+  ComplianceRequirementsApiResponse,
+} from "./types";
 
 export const getCompliancesOverview = async ({
   scanId,
@@ -11,7 +17,7 @@ export const getCompliancesOverview = async ({
   scanId?: string;
   region?: string | string[];
   filters?: Record<string, string | string[] | undefined>;
-} = {}) => {
+} = {}): Promise<ApiResult<ComplianceOverviewApiResponse> | undefined> => {
   const headers = await getAuthHeaders({ contentType: false });
 
   const url = new URL(`${apiBaseUrl}/compliance-overviews`);
@@ -73,16 +79,32 @@ export const getComplianceOverviewMetadataInfo = async ({
   }
 };
 
-export const getComplianceAttributes = async (complianceId: string) => {
+export const getComplianceAttributes = async (
+  complianceId: string,
+  scanId?: string,
+) => {
   const headers = await getAuthHeaders({ contentType: false });
 
   try {
     const url = new URL(`${apiBaseUrl}/compliance-overviews/attributes`);
     url.searchParams.append("filter[compliance_id]", complianceId);
+    // Pass the scan so multi-provider universal frameworks (e.g. CSA CCM)
+    // resolve the check IDs for the scan's provider instead of defaulting to
+    // the first provider that declares the framework.
+    if (scanId) {
+      url.searchParams.append("filter[scan_id]", scanId);
+    }
 
     const response = await fetch(url.toString(), {
       headers,
     });
+
+    // The compliance catalog is still warming after a deploy/restart. Signal
+    // the page to render the "still loading" state instead of letting this
+    // become a thrown 5xx (which would be captured as a server error).
+    if (response.status === 503) {
+      return { warming: true as const, status: 503 };
+    }
 
     return handleApiResponse(response);
   } catch (error) {
@@ -99,7 +121,7 @@ export const getComplianceRequirements = async ({
   complianceId: string;
   scanId: string;
   region?: string | string[];
-}) => {
+}): Promise<ApiResult<ComplianceRequirementsApiResponse> | undefined> => {
   const headers = await getAuthHeaders({ contentType: false });
 
   try {

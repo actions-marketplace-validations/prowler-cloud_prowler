@@ -7,6 +7,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from prowler.lib.check.models import CheckReportIAC
+from prowler.providers.iac.exceptions.exceptions import (
+    IacRepositoryCloneError,
+    IacScanError,
+)
 from prowler.providers.iac.iac_provider import IacProvider
 from tests.providers.iac.iac_fixtures import (
     DEFAULT_SCAN_PATH,
@@ -20,6 +24,9 @@ from tests.providers.iac.iac_fixtures import (
     SAMPLE_KUBERNETES_CHECK,
     SAMPLE_PASSED_CHECK,
     SAMPLE_SKIPPED_CHECK,
+    SAMPLE_TRIVY_NON_CVE_VULNERABILITY,
+    SAMPLE_TRIVY_VULNERABILITY_WITHOUT_CVE_ORG_REFERENCE,
+    SAMPLE_TRIVY_VULNERABILITY_WITHOUT_REFERENCES,
     SAMPLE_YAML_CHECK,
     get_empty_trivy_output,
     get_invalid_trivy_output,
@@ -57,13 +64,15 @@ class TestIacProvider:
         assert isinstance(report, CheckReportIAC)
         assert report.status == "FAIL"
 
+        # Trivy emits "AVD-AWS-0001"; Hub indexes it without the AVD- prefix.
+        expected_url = "https://hub.prowler.com/check/AWS-0001"
         assert report.check_metadata.Provider == "iac"
         assert report.check_metadata.CheckID == SAMPLE_FAILED_CHECK["ID"]
         assert report.check_metadata.CheckTitle == SAMPLE_FAILED_CHECK["Title"]
         assert report.check_metadata.Severity == "low"
-        assert report.check_metadata.RelatedUrl == SAMPLE_FAILED_CHECK.get(
-            "PrimaryURL", ""
-        )
+        assert report.check_metadata.Remediation.Recommendation.Url == expected_url
+        assert report.check_metadata.RelatedUrl == ""
+        assert report.check_metadata.AdditionalURLs == [expected_url]
 
     def test_iac_provider_process_finding_passed(self):
         """Test processing a passed finding"""
@@ -78,6 +87,101 @@ class TestIacProvider:
         assert report.check_metadata.CheckID == SAMPLE_PASSED_CHECK["ID"]
         assert report.check_metadata.CheckTitle == SAMPLE_PASSED_CHECK["Title"]
         assert report.check_metadata.Severity == "low"
+
+    def test_iac_provider_process_vulnerability_prefers_cve_reference_and_filters_aqua(
+        self,
+    ):
+        """Test CVE findings use cve.org and exclude Aqua references."""
+        provider = IacProvider()
+
+        report = provider._process_finding(
+            {
+                "VulnerabilityID": "CVE-2023-1234",
+                "Title": "Example vulnerability",
+                "Description": "This is an example vulnerability",
+                "Severity": "high",
+                "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2023-1234",
+                "References": [
+                    "https://avd.aquasec.com/nvd/cve-2023-1234",
+                    "https://nvd.nist.gov/vuln/detail/CVE-2023-1234",
+                    "https://www.cve.org/CVERecord?id=CVE-2023-1234",
+                    "https://security.example.com/advisories/CVE-2023-1234",
+                ],
+            },
+            "package.json",
+            "nodejs",
+        )
+
+        assert (
+            report.check_metadata.Remediation.Recommendation.Url
+            == "https://www.cve.org/CVERecord?id=CVE-2023-1234"
+        )
+        assert report.check_metadata.RelatedUrl == ""
+        assert report.check_metadata.AdditionalURLs == [
+            "https://www.cve.org/CVERecord?id=CVE-2023-1234"
+        ]
+
+    def test_iac_provider_process_vulnerability_builds_cve_org_for_nvd_reference(
+        self,
+    ):
+        """Test official CVE URL is built when only NVD is provided."""
+        provider = IacProvider()
+
+        report = provider._process_finding(
+            SAMPLE_TRIVY_VULNERABILITY_WITHOUT_CVE_ORG_REFERENCE,
+            "package.json",
+            "nodejs",
+        )
+
+        assert (
+            report.check_metadata.Remediation.Recommendation.Url
+            == "https://www.cve.org/CVERecord?id=CVE-2023-5678"
+        )
+        assert report.check_metadata.RelatedUrl == ""
+        assert report.check_metadata.AdditionalURLs == [
+            "https://www.cve.org/CVERecord?id=CVE-2023-5678"
+        ]
+
+    def test_iac_provider_process_vulnerability_builds_cve_org_when_references_missing(
+        self,
+    ):
+        """Test CVE URL is built from VulnerabilityID when references are absent."""
+        provider = IacProvider()
+
+        report = provider._process_finding(
+            SAMPLE_TRIVY_VULNERABILITY_WITHOUT_REFERENCES,
+            "package.json",
+            "nodejs",
+        )
+
+        assert (
+            report.check_metadata.Remediation.Recommendation.Url
+            == "https://www.cve.org/CVERecord?id=CVE-2023-9012"
+        )
+        assert report.check_metadata.RelatedUrl == ""
+        assert report.check_metadata.AdditionalURLs == [
+            "https://www.cve.org/CVERecord?id=CVE-2023-9012"
+        ]
+
+    def test_iac_provider_process_non_cve_vulnerability_falls_back_to_github_advisory(
+        self,
+    ):
+        """Non-CVE vulnerabilities (GHSA-…) point to GitHub Security Advisories."""
+        provider = IacProvider()
+
+        report = provider._process_finding(
+            SAMPLE_TRIVY_NON_CVE_VULNERABILITY,
+            "package.json",
+            "nodejs",
+        )
+
+        expected_url = (
+            "https://github.com/advisories/"
+            f"{SAMPLE_TRIVY_NON_CVE_VULNERABILITY['VulnerabilityID'].upper()}"
+        )
+        assert report.check_metadata.Remediation.Recommendation.Url == expected_url
+        assert report.check_metadata.RelatedUrl == ""
+        assert report.check_metadata.AdditionalURLs == [expected_url]
 
     @patch("subprocess.run")
     def test_iac_provider_run_scan_success(self, mock_subprocess):
@@ -223,12 +327,10 @@ class TestIacProvider:
             stdout=get_invalid_trivy_output(), stderr=""
         )
 
-        with pytest.raises(SystemExit) as excinfo:
+        with pytest.raises(IacScanError):
             # Consume the generator
             for _ in provider.run_scan("/test/directory", ["all"], []):
                 pass
-
-        assert excinfo.value.code == 1
 
     @patch("subprocess.run")
     def test_iac_provider_run_scan_null_output(self, mock_subprocess):
@@ -237,13 +339,12 @@ class TestIacProvider:
 
         mock_subprocess.return_value = MagicMock(stdout="null", stderr="")
 
-        with pytest.raises(SystemExit) as exc_info:
+        with pytest.raises(IacScanError):
             # Consume the generator
             for _ in provider.run_scan(
                 "/test/directory", ["vuln", "misconfig", "secret"], []
             ):
                 pass
-        assert exc_info.value.code == 1
 
     def test_iac_provider_process_finding_dockerfile(self):
         """Test processing a Dockerfile finding"""
@@ -414,14 +515,12 @@ class TestIacProvider:
         # Make subprocess.run raise an exception
         mock_subprocess.side_effect = Exception("Test exception")
 
-        with pytest.raises(SystemExit) as exc_info:
+        with pytest.raises(IacScanError):
             # Consume the generator
             for _ in provider.run_scan(
                 "/test/directory", ["vuln", "misconfig", "secret"], []
             ):
                 pass
-
-        assert exc_info.value.code == 1
 
     @patch("subprocess.run")
     def test_run_scan_with_different_frameworks(self, mock_subprocess):
@@ -716,6 +815,26 @@ class TestIacProvider:
         mock_clone.assert_called_with(expected_url, "/tmp/fake-dir", depth=1)
         assert temp_dir == "/tmp/fake-dir"
         assert branch_name == "master"
+
+    @mock.patch("prowler.providers.iac.iac_provider.porcelain.clone")
+    @mock.patch("tempfile.mkdtemp", return_value="/tmp/fake-dir")
+    def test_clone_repository_failure_raises(self, _mock_mkdtemp, mock_clone):
+        """A failed clone must raise a typed error instead of returning `None`.
+
+        `_clone_repository` is annotated `-> tuple[str, str]` and `__init__`
+        unpacks the result directly, so falling through the error handler used
+        to raise `TypeError: cannot unpack non-sequence NoneType`. Raising
+        `IacRepositoryCloneError` lets the CLI exit with the logged message and
+        lets the API report the failure as a normal task error instead of a
+        `SystemExit` escaping the Celery worker.
+        """
+        mock_clone.side_effect = Exception("repository not found")
+
+        with pytest.raises(IacRepositoryCloneError) as exc_info:
+            IacProvider(scan_repository_url="https://github.com/user/repo.git")
+
+        assert "repository not found" in str(exc_info.value)
+        assert exc_info.value.code == 21000
 
     def test_detect_branch_name_main(self):
         """Test detecting 'main' branch from .git/HEAD"""

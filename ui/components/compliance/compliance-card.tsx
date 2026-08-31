@@ -2,22 +2,27 @@
 
 import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
+import type { ReactNode } from "react";
 
-import { Card, CardContent } from "@/components/shadcn/card/card";
+import { Card, CardAction, CardContent } from "@/components/shadcn/card/card";
 import { Progress } from "@/components/shadcn/progress";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/shadcn/tooltip";
+import { buildComplianceDetailPath } from "@/lib/compliance/compliance-detail-url";
 import { getReportTypeForCompliance } from "@/lib/compliance/compliance-report-types";
+import { formatComplianceFrameworkTitle } from "@/lib/compliance/framework-title";
 import {
   getScoreIndicatorClass,
   type ScoreColorVariant,
 } from "@/lib/compliance/score-utils";
+import { cn } from "@/lib/utils";
 import { ScanEntity } from "@/types/scans";
 
 import { getComplianceIcon } from "../icons";
+
 import { ComplianceDownloadContainer } from "./compliance-download-container";
 
 interface ComplianceCardProps {
@@ -38,6 +43,13 @@ interface ComplianceCardProps {
    * Ignored for non-CIS frameworks.
    */
   isLatestCisForProvider?: boolean;
+  /**
+   * Watchlist control rendered in the card's top-right corner, beside the
+   * export action, so it costs no vertical room. Cloud-only and gated on
+   * MANAGE_SCANS, so it is absent (rather than disabled) whenever the
+   * viewer cannot curate the organization's watchlist.
+   */
+  watchlistAction?: ReactNode;
 }
 
 export const ComplianceCard: React.FC<ComplianceCardProps> = ({
@@ -49,14 +61,13 @@ export const ComplianceCard: React.FC<ComplianceCardProps> = ({
   complianceId,
   id,
   isLatestCisForProvider = false,
+  watchlistAction,
 }) => {
   const searchParams = useSearchParams();
   const router = useRouter();
   const hasRegionFilter = searchParams.has("filter[region__in]");
 
-  const formatTitle = (title: string) => {
-    return title.split("-").join(" ");
-  };
+  const formattedTitle = formatComplianceFrameworkTitle(title, version);
 
   const ratingPercentage = Math.floor(
     (passingRequirements / totalRequirements) * 100,
@@ -69,79 +80,61 @@ export const ComplianceCard: React.FC<ComplianceCardProps> = ({
   };
 
   const navigateToDetail = () => {
-    const formattedTitleForUrl = encodeURIComponent(title);
-    const path = `/compliance/${formattedTitleForUrl}`;
-    const params = new URLSearchParams();
-
-    params.set("complianceId", id);
-    params.set("version", version);
-    params.set("scanId", scanId);
-
-    const regionFilter = searchParams.get("filter[region__in]");
-    if (regionFilter) {
-      params.set("filter[region__in]", regionFilter);
-    }
-
-    router.push(`${path}?${params.toString()}`);
+    router.push(
+      buildComplianceDetailPath({
+        title,
+        complianceId: id,
+        version,
+        scanId,
+        regionFilter: searchParams.get("filter[region__in]"),
+      }),
+    );
   };
 
   return (
-    <Card
-      variant="base"
-      padding="md"
-      className="cursor-pointer transition-shadow hover:shadow-md"
-      onClick={navigateToDetail}
-    >
-      <CardContent className="p-0">
-        <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-start">
-          <div className="flex shrink-0 items-center justify-between sm:flex-col sm:items-start sm:gap-2">
-            {getComplianceIcon(title) && (
-              <Image
-                src={getComplianceIcon(title)}
-                alt={`${title} logo`}
-                className="h-10 w-10 min-w-10 self-start rounded-md border border-gray-300 bg-white object-contain p-1"
-              />
-            )}
+    <Card variant="base" padding="none" interactive className="relative">
+      <button
+        type="button"
+        aria-label={`Open ${formattedTitle} compliance details`}
+        onClick={navigateToDetail}
+        className="focus-visible:ring-border-neutral-secondary/50 w-full rounded-xl bg-transparent px-4 py-3 text-left outline-none focus-visible:ring-2"
+      >
+        <CardContent>
+          <div className="flex w-full flex-col gap-3">
             <div
-              className="shrink-0"
-              onClick={(e) => e.stopPropagation()}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.stopPropagation();
-                }
-              }}
-              role="group"
-              tabIndex={0}
+              className={cn(
+                "flex items-center gap-3",
+                watchlistAction ? "pr-16" : "pr-9",
+              )}
             >
-              <ComplianceDownloadContainer
-                compact
-                orientation="column"
-                buttonWidth="icon"
-                presentation="dropdown"
-                scanId={scanId}
-                complianceId={complianceId}
-                reportType={getReportTypeForCompliance(
-                  title,
-                  complianceId,
-                  isLatestCisForProvider,
-                )}
-                disabled={hasRegionFilter}
-              />
+              {getComplianceIcon(title) && (
+                <div className="border-border-neutral-tertiary flex h-10 w-10 min-w-10 shrink-0 items-center justify-center rounded-md border bg-slate-50">
+                  <Image
+                    src={getComplianceIcon(title)}
+                    alt={`${title} logo`}
+                    width={32}
+                    height={32}
+                    className="h-8 w-8 object-contain"
+                  />
+                </div>
+              )}
+              <div className="flex min-w-0 flex-1 flex-col">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <h4 className="truncate text-sm leading-5 font-bold">
+                      {formattedTitle}
+                    </h4>
+                  </TooltipTrigger>
+                  <TooltipContent>{formattedTitle}</TooltipContent>
+                </Tooltip>
+                <small className="truncate">
+                  <span className="mr-1 text-xs font-semibold">
+                    {passingRequirements} / {totalRequirements}
+                  </span>
+                  Passing Requirements
+                </small>
+              </div>
             </div>
-          </div>
-          <div className="flex w-full min-w-0 flex-col gap-3">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <h4 className="text-small truncate leading-5 font-bold">
-                  {formatTitle(title)}
-                  {version ? ` - ${version}` : ""}
-                </h4>
-              </TooltipTrigger>
-              <TooltipContent>
-                {formatTitle(title)}
-                {version ? ` - ${version}` : ""}
-              </TooltipContent>
-            </Tooltip>
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between gap-3 text-xs">
                 <span className="text-text-neutral-secondary font-medium tracking-wider">
@@ -160,17 +153,30 @@ export const ComplianceCard: React.FC<ComplianceCardProps> = ({
                 )}
               />
             </div>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <small className="min-w-0">
-                <span className="mr-1 text-xs font-semibold">
-                  {passingRequirements} / {totalRequirements}
-                </span>
-                Passing Requirements
-              </small>
-            </div>
           </div>
-        </div>
-      </CardContent>
+        </CardContent>
+      </button>
+      <CardAction
+        className="absolute top-2 right-2 z-10 flex items-center gap-1"
+        role="group"
+        aria-label="Compliance actions"
+      >
+        <ComplianceDownloadContainer
+          compact
+          orientation="column"
+          buttonWidth="icon"
+          presentation="dropdown"
+          scanId={scanId}
+          complianceId={complianceId}
+          reportType={getReportTypeForCompliance(
+            title,
+            complianceId,
+            isLatestCisForProvider,
+          )}
+          disabled={hasRegionFilter}
+        />
+        {watchlistAction}
+      </CardAction>
     </Card>
   );
 };

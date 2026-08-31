@@ -12,7 +12,9 @@ vi.mock("@/actions/mute-rules", () => ({
   createMuteRule: createMuteRuleMock,
 }));
 
-vi.mock("@/components/shadcn", () => ({
+vi.mock("@/components/shadcn", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  useToast: () => ({ toast: toastMock }),
   Button: ({
     children,
     ...props
@@ -56,13 +58,7 @@ vi.mock("@/components/shadcn/spinner/spinner", () => ({
   ),
 }));
 
-vi.mock("@/components/ui", () => ({
-  useToast: () => ({
-    toast: toastMock,
-  }),
-}));
-
-vi.mock("@/components/ui/form", () => ({
+vi.mock("@/components/shadcn/form", () => ({
   FormButtons: ({
     onCancel,
     submitText = "Save",
@@ -106,6 +102,11 @@ describe("MuteFindingsModal", () => {
     expect(
       screen.getByText("Explain why these findings are being muted"),
     ).toBeInTheDocument();
+    expect(screen.getByText("0/100 characters")).toBeInTheDocument();
+    expect(screen.getByLabelText("Rule Name")).toHaveAttribute(
+      "maxLength",
+      "100",
+    );
     expect(screen.getByText("0/500 characters")).toBeInTheDocument();
     expect(screen.getByLabelText("Reason")).toHaveAttribute("maxLength", "500");
   });
@@ -181,6 +182,25 @@ describe("MuteFindingsModal", () => {
     expect(screen.getByText("500/500 characters")).toBeInTheDocument();
     expect(
       screen.getByText("Reason must be 500 characters or fewer"),
+    ).toBeInTheDocument();
+  });
+
+  it("clamps oversized rule name input and shows a local validation error", () => {
+    render(
+      <MuteFindingsModal
+        isOpen
+        onOpenChange={vi.fn()}
+        findingIds={["finding-1"]}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Rule Name"), {
+      target: { value: "a".repeat(101) },
+    });
+
+    expect(screen.getByText("100/100 characters")).toBeInTheDocument();
+    expect(
+      screen.getByText("Name must be 100 characters or fewer"),
     ).toBeInTheDocument();
   });
 });

@@ -1,8 +1,10 @@
 from argparse import Namespace
+from functools import lru_cache
 from json import dumps
 
+import botocore.session
 from boto3 import client, session
-from botocore.config import Config
+from botocore.validate import ParamValidator
 from moto import mock_aws
 
 from prowler.config.config import (
@@ -116,6 +118,12 @@ def set_mocked_aws_provider(
     status: list[str] = [],
     create_default_organization: bool = True,
 ) -> AwsProvider:
+    if audited_regions is None:
+        raise ValueError(
+            "audited_regions is None, which means all 36 regions will be used. "
+            "Pass an explicit list of regions instead."
+        )
+
     if create_default_organization:
         # Create default AWS Organization
         create_default_aws_organization()
@@ -127,10 +135,11 @@ def set_mocked_aws_provider(
     provider = AwsProvider()
 
     # Mock Session
-    provider._session.session_config = None
+    session_config = AwsProvider.set_session_config(None)
+    provider._session.session_config = session_config
     provider._session.original_session = original_session
     provider._session.current_session = audit_session
-    provider._session.session_config = Config()
+    audit_session._session.set_default_client_config(session_config)
     # Mock Identity
     provider._identity.account = audited_account
     provider._identity.account_arn = audited_account_arn
@@ -191,7 +200,13 @@ def create_default_aws_organization():
     mockdomain = "moto-example.org"
     mockemail = "@".join([mockname, mockdomain])
 
-    _ = organizations_client.create_organization(FeatureSet="ALL")["Organization"]["Id"]
+    try:
+        _ = organizations_client.create_organization(FeatureSet="ALL")["Organization"][
+            "Id"
+        ]
+    except organizations_client.exceptions.AlreadyInOrganizationException:
+        return
+
     account_id = organizations_client.create_account(
         AccountName=mockname, Email=mockemail
     )["CreateAccountStatus"]["AccountId"]
@@ -223,3 +238,38 @@ def create_role(
         PolicyArn=policy["Arn"],
     )
     return administrator_role["Arn"]
+
+
+@lru_cache(maxsize=None)
+def _service_model(service_name: str):
+    return botocore.session.get_session().get_service_model(service_name)
+
+
+def mocked_api_response(service_name: str, operation_name: str, response: dict) -> dict:
+    """Validate a hand-written mocked response against the real AWS API model.
+
+    Responses returned from a `botocore.client.BaseClient._make_api_call` mock are
+    not validated by botocore, so a mock can return fields that the API never
+    sends and the test will still pass. Wrapping the response with this helper
+    turns that silent mismatch into a test failure.
+
+    Args:
+        service_name: Boto3 service name, e.g. `securityhub`.
+        operation_name: API operation name in PascalCase, e.g. `DescribeHub`.
+        response: The mocked response to validate and return.
+
+    Returns:
+        The response, unchanged.
+
+    Raises:
+        AssertionError: If the response does not match the operation output shape.
+    """
+    output_shape = (
+        _service_model(service_name).operation_model(operation_name).output_shape
+    )
+    report = ParamValidator().validate(response, output_shape)
+    assert not report.has_errors(), (
+        f"Mocked {service_name}:{operation_name} response does not match the API "
+        f"model: {report.generate_report()}"
+    )
+    return response

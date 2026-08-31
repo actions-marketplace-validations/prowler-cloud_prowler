@@ -1,21 +1,54 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
-import { apiBaseUrl, getAuthHeaders, getErrorMessage } from "@/lib";
+import {
+  apiBaseUrl,
+  GENERIC_SERVER_ERROR_MESSAGE,
+  getAuthHeaders,
+  getErrorMessage,
+} from "@/lib";
 import {
   COMPLIANCE_REPORT_DISPLAY_NAMES,
   type ComplianceReportType,
 } from "@/lib/compliance/compliance-report-types";
 import { runWithConcurrencyLimit } from "@/lib/concurrency";
-import {
-  appendSanitizedProviderTypeFilters,
-  sanitizeProviderTypesCsv,
-} from "@/lib/provider-filters";
+import { appendSanitizedProviderTypeFilters } from "@/lib/provider-filters";
 import { addScanOperation } from "@/lib/sentry-breadcrumbs";
 import { handleApiError, handleApiResponse } from "@/lib/server-actions-helper";
+import { SCAN_STATES } from "@/types/attack-paths";
 
 const ORGANIZATION_SCAN_CONCURRENCY_LIMIT = 5;
+
+interface OrganizationScanResource {
+  id: string;
+  type: string;
+}
+
+interface OrganizationScansSuccessResponse {
+  data: OrganizationScanResource[];
+}
+
+interface OrganizationScansErrorResponse {
+  error: unknown;
+  status?: number;
+}
+
+type OrganizationScansResponse =
+  | OrganizationScansSuccessResponse
+  | OrganizationScansErrorResponse;
+
+const isOrganizationScanResource = (
+  value: unknown,
+): value is OrganizationScanResource =>
+  typeof value === "object" &&
+  value !== null &&
+  "id" in value &&
+  typeof value.id === "string" &&
+  "type" in value &&
+  value.type === "scans";
+
 export const getScans = async ({
   page = 1,
   query = "",
@@ -59,10 +92,10 @@ export const getScansByState = async () => {
   const url = new URL(`${apiBaseUrl}/scans`);
   // Request only the necessary fields to optimize the response
   url.searchParams.append("fields[scans]", "state");
-  url.searchParams.append(
-    "filter[provider_type__in]",
-    sanitizeProviderTypesCsv(),
-  );
+  // Only need to know whether at least one completed scan exists; filter server-side
+  // and cap to a single row so the answer is correct regardless of total scan count.
+  url.searchParams.append("filter[state]", SCAN_STATES.COMPLETED);
+  url.searchParams.append("page[size]", "1");
 
   try {
     const response = await fetch(url.toString(), {
@@ -140,6 +173,7 @@ export const scanOnDemand = async (formData: FormData) => {
     const result = await handleApiResponse(response, "/scans");
     if (result?.data?.id) {
       addScanOperation("start", result.data.id);
+      revalidatePath("/scans");
     }
     return result;
   } catch (error) {
@@ -155,18 +189,20 @@ export const scheduleDaily = async (formData: FormData) => {
 
   const url = new URL(`${apiBaseUrl}/schedules/daily`);
 
+  const body = {
+    data: {
+      type: "daily-schedules",
+      attributes: {
+        provider_id: providerId,
+      },
+    },
+  };
+
   try {
     const response = await fetch(url.toString(), {
       method: "POST",
       headers,
-      body: JSON.stringify({
-        data: {
-          type: "daily-schedules",
-          attributes: {
-            provider_id: providerId,
-          },
-        },
-      }),
+      body: JSON.stringify(body),
     });
 
     return handleApiResponse(response, "/scans");
@@ -176,9 +212,60 @@ export const scheduleDaily = async (formData: FormData) => {
 };
 
 export const launchOrganizationScans = async (
-  providerIds: string[],
-  scheduleOption: "daily" | "single",
-) => {
+  organizationId: string,
+): Promise<OrganizationScansResponse> => {
+  if (!organizationId) {
+    return { error: "Organization ID is required" };
+  }
+
+  const headers = await getAuthHeaders({ contentType: true });
+  const url = new URL(`${apiBaseUrl}/scans/bulk`);
+
+  try {
+    const response = await fetch(url.toString(), {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        data: {
+          type: "scans-bulk",
+          relationships: {
+            organization: {
+              data: {
+                type: "organizations",
+                id: organizationId,
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    const result = await handleApiResponse(response, "/scans");
+    if (result?.error !== undefined) {
+      return { error: result.error, status: result.status };
+    }
+
+    const scans: unknown = result?.data;
+    if (!Array.isArray(scans) || !scans.every(isOrganizationScanResource)) {
+      return {
+        error: "The bulk scan response did not contain a scan collection.",
+      };
+    }
+
+    addScanOperation("start", undefined, {
+      organization_id: organizationId,
+      bulk: true,
+      scan_count: scans.length,
+      scan_ids: scans.map((scan) => scan.id).join(","),
+    });
+
+    return { data: scans };
+  } catch (error) {
+    return handleApiError(error);
+  }
+};
+
+export const scheduleOrganizationDailyScans = async (providerIds: string[]) => {
   const validProviderIds = providerIds.filter(Boolean);
   if (validProviderIds.length === 0) {
     return {
@@ -196,10 +283,7 @@ export const launchOrganizationScans = async (
         const formData = new FormData();
         formData.set("providerId", providerId);
 
-        const result =
-          scheduleOption === "daily"
-            ? await scheduleDaily(formData)
-            : await scanOnDemand(formData);
+        const result = await scheduleDaily(formData);
 
         return {
           providerId,
@@ -241,6 +325,27 @@ export const launchOrganizationScans = async (
 
   return summary;
 };
+
+async function getScanReportErrorMessage(
+  response: Response,
+  fallbackMessage: string,
+): Promise<string> {
+  const contentType = response.headers.get("content-type")?.toLowerCase() || "";
+
+  if (contentType.includes("text/html")) {
+    return GENERIC_SERVER_ERROR_MESSAGE;
+  }
+
+  const errorData = await response.json().catch(() => null);
+
+  return (
+    errorData?.errors?.[0]?.detail ||
+    errorData?.errors?.detail ||
+    errorData?.error ||
+    errorData?.message ||
+    (response.status >= 500 ? GENERIC_SERVER_ERROR_MESSAGE : fallbackMessage)
+  );
+}
 
 export const updateScan = async (formData: FormData) => {
   const headers = await getAuthHeaders({ contentType: true });
@@ -293,11 +398,11 @@ export const getExportsZip = async (scanId: string) => {
     }
 
     if (!response.ok) {
-      const errorData = await response.json();
-
       throw new Error(
-        errorData?.errors?.detail ||
+        await getScanReportErrorMessage(
+          response,
           "Unable to fetch scan report. Contact support if the issue continues.",
+        ),
       );
     }
 
@@ -368,10 +473,11 @@ const _fetchScanBinary = async (
     }
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
       throw new Error(
-        errorData?.errors?.detail ||
+        await getScanReportErrorMessage(
+          response,
           `Unable to retrieve ${errorLabel}. Contact support if the issue continues.`,
+        ),
       );
     }
 
@@ -390,6 +496,27 @@ export const getComplianceCsv = async (scanId: string, complianceId: string) =>
     `compliance/${complianceId}`,
     `scan-${scanId}-compliance-${complianceId}.csv`,
     "compliance report",
+  );
+
+/**
+ * Get the OCSF JSON export for a universal compliance framework.
+ *
+ * Only universal frameworks that declare an ``outputs`` block (today: DORA,
+ * CSA CCM 4.0) produce a per-framework OCSF artifact. For any other framework
+ * the backend returns 404; callers should gate this download via
+ * ``isOcsfSupported(framework)``.
+ *
+ * NOTE: this is a dedicated path (``compliance/{id}/ocsf``), not a query
+ * param. The API's JSON:API ``QueryParameterValidationFilter`` rejects any
+ * non-JSON:API query param with 400, so ``?type=`` / ``?format=`` is not an
+ * option — the format must be encoded in the route.
+ */
+export const getComplianceOcsf = async (scanId: string, complianceId: string) =>
+  _fetchScanBinary(
+    scanId,
+    `compliance/${complianceId}/ocsf`,
+    `scan-${scanId}-compliance-${complianceId}.ocsf.json`,
+    "compliance OCSF report",
   );
 
 /**

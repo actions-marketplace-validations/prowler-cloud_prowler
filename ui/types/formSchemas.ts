@@ -1,11 +1,52 @@
+import yaml from "js-yaml";
 import { z } from "zod";
 
 import { ProviderCredentialFields } from "@/lib/provider-credentials/provider-credential-fields";
 import { validateMutelistYaml, validateYaml } from "@/lib/yaml";
+import { MAX_SAML_ADDITIONAL_EMAIL_DOMAINS } from "@/types/saml";
 
 import { PROVIDER_TYPES, ProviderType } from "./providers";
 
-export const addRoleFormSchema = z.object({
+export const KUBECONFIG_UNSUPPORTED_COMMAND_AUTHENTICATION_ERROR =
+  "Kubernetes kubeconfig command-based authentication is not supported in Prowler Cloud for security reasons.";
+
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+};
+
+export const kubeconfigContainsUnsupportedCommandAuthentication = (
+  value: string,
+): boolean => {
+  try {
+    const parsed = yaml.load(value);
+
+    if (!isRecord(parsed) || !Array.isArray(parsed.users)) {
+      return false;
+    }
+
+    return parsed.users.some((userEntry) => {
+      if (!isRecord(userEntry) || !isRecord(userEntry.user)) {
+        return false;
+      }
+
+      if ("exec" in userEntry.user) {
+        return true;
+      }
+
+      const authProvider = userEntry.user["auth-provider"];
+      if (!isRecord(authProvider) || !isRecord(authProvider.config)) {
+        return false;
+      }
+
+      return "cmd-path" in authProvider.config;
+    });
+  } catch {
+    return false;
+  }
+};
+
+// Create and edit share the same shape, so a single schema backs both flows.
+export const roleFormSchema = z.object({
   name: z.string().min(1, "Name is required"),
   manage_users: z.boolean().default(false),
   manage_account: z.boolean().default(false),
@@ -13,38 +54,13 @@ export const addRoleFormSchema = z.object({
   manage_providers: z.boolean().default(false),
   manage_integrations: z.boolean().default(false),
   manage_scans: z.boolean().default(false),
+  manage_alerts: z.boolean().default(false),
+  manage_lighthouse_ai_configuration: z.boolean().default(false),
   unlimited_visibility: z.boolean().default(false),
   groups: z.array(z.string()).optional(),
 });
 
-export const editRoleFormSchema = z.object({
-  name: z.string().min(1, "Name is required"),
-  manage_users: z.boolean().default(false),
-  manage_account: z.boolean().default(false),
-  manage_billing: z.boolean().default(false),
-  manage_providers: z.boolean().default(false),
-  manage_integrations: z.boolean().default(false),
-  manage_scans: z.boolean().default(false),
-  unlimited_visibility: z.boolean().default(false),
-  groups: z.array(z.string()).optional(),
-});
-
-export const editScanFormSchema = (currentName: string) =>
-  z.object({
-    scanName: z
-      .string()
-      .refine((val) => val === "" || val.length >= 3, {
-        message: "Must be empty or have at least 3 characters.",
-      })
-      .refine((val) => val === "" || val.length <= 32, {
-        message: "Must not exceed 32 characters.",
-      })
-      .refine((val) => val !== currentName, {
-        message: "The new name must be different from the current one.",
-      })
-      .optional(),
-    scanId: z.string(),
-  });
+export type RoleFormValues = z.input<typeof roleFormSchema>;
 
 export const onDemandScanFormSchema = () =>
   z.object({
@@ -161,6 +177,18 @@ export const addProviderFormSchema = z
         [ProviderCredentialFields.PROVIDER_ALIAS]: z.string(),
         providerUid: z.string().trim().min(1, "Team ID is required"),
       }),
+      z.object({
+        providerType: z.literal("okta"),
+        [ProviderCredentialFields.PROVIDER_ALIAS]: z.string(),
+        providerUid: z
+          .string()
+          .trim()
+          .toLowerCase()
+          .regex(
+            /^[a-z0-9][a-z0-9-]*\.(okta\.com|oktapreview\.com|okta-emea\.com|okta-gov\.com|okta\.mil|okta-miltest\.com|trex-govcloud\.com)$/,
+            "Org Domain must be an Okta-managed domain (e.g. acme.okta.com), without scheme or path",
+          ),
+      }),
     ]),
   );
 
@@ -210,7 +238,17 @@ export const addCredentialsFormSchema = (
               ? {
                   [ProviderCredentialFields.KUBECONFIG_CONTENT]: z
                     .string()
-                    .min(1, "Kubeconfig Content is required"),
+                    .min(1, "Kubeconfig Content is required")
+                    .refine(
+                      (value) =>
+                        !kubeconfigContainsUnsupportedCommandAuthentication(
+                          value,
+                        ),
+                      {
+                        error:
+                          KUBECONFIG_UNSUPPORTED_COMMAND_AUTHENTICATION_ERROR,
+                      },
+                    ),
                 }
               : providerType === "m365"
                 ? {
@@ -265,9 +303,6 @@ export const addCredentialsFormSchema = (
                           [ProviderCredentialFields.OCI_TENANCY]: z
                             .string()
                             .min(1, "Tenancy OCID is required"),
-                          [ProviderCredentialFields.OCI_REGION]: z
-                            .string()
-                            .min(1, "Region is required"),
                           [ProviderCredentialFields.OCI_PASS_PHRASE]: z
                             .union([z.string(), z.literal("")])
                             .optional(),
@@ -389,7 +424,23 @@ export const addCredentialsFormSchema = (
                                             .trim()
                                             .min(1, "API Token is required"),
                                       }
-                                    : {}),
+                                    : providerType === "okta"
+                                      ? {
+                                          [ProviderCredentialFields.OKTA_CLIENT_ID]:
+                                            z
+                                              .string()
+                                              .trim()
+                                              .min(1, "Client ID is required"),
+                                          [ProviderCredentialFields.OKTA_PRIVATE_KEY]:
+                                            z
+                                              .string()
+                                              .trim()
+                                              .min(
+                                                1,
+                                                "Private Key is required",
+                                              ),
+                                        }
+                                      : {}),
     })
     .superRefine((data: Record<string, string | undefined>, ctx) => {
       if (providerType === "m365") {
@@ -673,16 +724,101 @@ export const editUserFormSchema = () =>
     role: z.string().optional(),
   });
 
-export const samlConfigFormSchema = z.object({
-  email_domain: z
+const createSamlEmailDomainSchema = (requiredMessage: string) =>
+  z
     .string()
     .trim()
-    .min(1, { message: "Email domain is required" }),
-  metadata_xml: z
-    .string()
-    .trim()
-    .min(1, { message: "Metadata XML is required" }),
+    .min(1, { error: requiredMessage })
+    .transform((domain) => domain.toLowerCase());
+
+export const samlEmailDomainSchema = createSamlEmailDomainSchema(
+  "Email domain is required",
+);
+
+export const samlAdditionalEmailDomainSchema = createSamlEmailDomainSchema(
+  "Additional email domain is required",
+);
+
+const samlConfigDomainSchema = z.object({
+  email_domain: samlEmailDomainSchema,
+  additional_email_domains: z
+    .array(samlAdditionalEmailDomainSchema)
+    .max(MAX_SAML_ADDITIONAL_EMAIL_DOMAINS, {
+      error: `A SAML configuration supports up to ${MAX_SAML_ADDITIONAL_EMAIL_DOMAINS} additional email domains.`,
+    })
+    .default([]),
 });
+
+const samlMetadataXmlSchema = z
+  .string()
+  .trim()
+  .min(1, { error: "Metadata XML is required" });
+
+const samlOptionalMetadataXmlSchema = z.string().trim();
+
+const validateSamlDomains = (
+  data: z.output<typeof samlConfigDomainSchema>,
+  ctx: z.RefinementCtx,
+) => {
+  const populatedAdditionalDomains = data.additional_email_domains.filter(
+    (domain) => domain.length > 0,
+  );
+
+  if (
+    new Set(populatedAdditionalDomains).size !==
+    populatedAdditionalDomains.length
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      message: "Additional email domains must be unique.",
+      path: ["additional_email_domains"],
+    });
+  }
+
+  if (
+    data.email_domain.length > 0 &&
+    populatedAdditionalDomains.includes(data.email_domain)
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      message:
+        "Additional email domains must differ from the primary email domain.",
+      path: ["additional_email_domains"],
+    });
+  }
+};
+
+export const getSamlConfigFormSchema = (isUpdate: boolean) =>
+  samlConfigDomainSchema
+    .extend({
+      metadata_xml: isUpdate
+        ? samlOptionalMetadataXmlSchema
+        : samlMetadataXmlSchema,
+    })
+    .superRefine(validateSamlDomains);
+
+export type SamlConfigFormInput = z.input<
+  ReturnType<typeof getSamlConfigFormSchema>
+>;
+export type SamlConfigFormValues = z.output<
+  ReturnType<typeof getSamlConfigFormSchema>
+>;
+
+export const samlConfigFormSchema = getSamlConfigFormSchema(false);
+
+export const samlConfigUpdateFormSchema = samlConfigDomainSchema
+  .extend({
+    metadata_xml: z.preprocess(
+      (value) =>
+        value === null ||
+        value === undefined ||
+        (typeof value === "string" && value.trim() === "")
+          ? undefined
+          : value,
+      samlMetadataXmlSchema.optional(),
+    ),
+  })
+  .superRefine(validateSamlDomains);
 
 export const mutedFindingsConfigFormSchema = z.object({
   configuration: z
@@ -707,5 +843,32 @@ export const mutedFindingsConfigFormSchema = z.object({
         });
       }
     }),
+  id: z.string().optional(),
+});
+
+// Mirrors the Mutelist contract: the client only validates YAML *syntax* (that
+// it parses to a mapping). The actual configuration validation (ranges, enums)
+// is performed by the API on create/update and surfaced inline — see
+// `validate_configuration` in the backend serializer.
+export const scanConfigurationFormSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(3, { message: "Name must be at least 3 characters" })
+    .max(100, { message: "Name must be at most 100 characters" }),
+  configuration: z
+    .string()
+    .trim()
+    .min(1, { error: "Configuration is required" })
+    .superRefine((val, ctx) => {
+      const yamlValidation = validateYaml(val);
+      if (!yamlValidation.isValid) {
+        ctx.addIssue({
+          code: "custom",
+          message: `Invalid YAML format: ${yamlValidation.error}`,
+        });
+      }
+    }),
+  provider_ids: z.array(z.uuid()).optional().default([]),
   id: z.string().optional(),
 });

@@ -4,7 +4,7 @@ title: 'Installation'
 
 ## Installation
 
-To install Prowler as a Python package, use `Python >= 3.10, <= 3.12`. Prowler is available as a project in [PyPI](https://pypi.org/project/prowler/):
+To install Prowler as a Python package, use `Python >= 3.10, <= 3.13`. Prowler is available as a project in [PyPI](https://pypi.org/project/prowler/):
 
 <Tabs>
   <Tab title="pipx">
@@ -12,7 +12,7 @@ To install Prowler as a Python package, use `Python >= 3.10, <= 3.12`. Prowler i
 
     _Requirements_:
 
-    * `Python >= 3.10, <= 3.12`
+    * `Python >= 3.10, <= 3.13`
     * `pipx` installed: [pipx installation](https://pipx.pypa.io/stable/installation/).
     * AWS, GCP, Azure and/or Kubernetes credentials
 
@@ -30,7 +30,7 @@ To install Prowler as a Python package, use `Python >= 3.10, <= 3.12`. Prowler i
 
     _Requirements_:
 
-    * `Python >= 3.10, <= 3.12`
+    * `Python >= 3.10, <= 3.13`
     * `Python pip >= 21.0.0`
     * AWS, GCP, Azure, M365 and/or Kubernetes credentials
 
@@ -40,18 +40,12 @@ To install Prowler as a Python package, use `Python >= 3.10, <= 3.12`. Prowler i
     pip install prowler
     prowler -v
     ```
-
-    To upgrade Prowler to the latest version:
-
-    ``` bash
-    pip install --upgrade prowler
-    ```
   </Tab>
   <Tab title="Docker">
     _Requirements_:
 
     * Have `docker` installed: https://docs.docker.com/get-docker/.
-    * In the command below, change `-v` to your local directory path in order to access the reports.
+    * In the command below, change `-v` to your local directory path to access the reports.
     * AWS, GCP, Azure and/or Kubernetes credentials
 
     _Commands_:
@@ -68,7 +62,7 @@ To install Prowler as a Python package, use `Python >= 3.10, <= 3.12`. Prowler i
     _Requirements for Developers_:
 
     * `git`
-    * `poetry` installed: [poetry installation](https://python-poetry.org/docs/#installation).
+    * `uv` installed: [uv installation](https://docs.astral.sh/uv/getting-started/installation/).
     * AWS, GCP, Azure and/or Kubernetes credentials
 
     _Commands_:
@@ -76,8 +70,8 @@ To install Prowler as a Python package, use `Python >= 3.10, <= 3.12`. Prowler i
     ```bash
     git clone https://github.com/prowler-cloud/prowler
     cd prowler
-    poetry install
-    poetry run python prowler-cli.py -v
+    uv sync
+    uv run python prowler-cli.py -v
     ```
 
     <Note>
@@ -87,7 +81,7 @@ To install Prowler as a Python package, use `Python >= 3.10, <= 3.12`. Prowler i
   <Tab title="Amazon Linux 2">
     _Requirements_:
 
-    * `Python >= 3.10, <= 3.12`
+    * `Python >= 3.10, <= 3.13`
     * AWS, GCP, Azure and/or Kubernetes credentials
 
     _Commands_:
@@ -102,8 +96,8 @@ To install Prowler as a Python package, use `Python >= 3.10, <= 3.12`. Prowler i
   <Tab title="Ubuntu">
     _Requirements_:
 
-    * `Ubuntu 23.04` or above. For older Ubuntu versions, check [pipx installation](https://docs.prowler.com/projects/prowler-open-source/en/latest/#__tabbed_1_1) and ensure `Python >= 3.10, <= 3.12` is installed.
-    * `Python >= 3.10, <= 3.12`
+    * `Ubuntu 23.04` or above. For older Ubuntu versions, check [pipx installation](https://docs.prowler.com/projects/prowler-open-source/en/latest/#__tabbed_1_1) and ensure `Python >= 3.10, <= 3.13` is installed.
+    * `Python >= 3.10, <= 3.13`
     * AWS, GCP, Azure and/or Kubernetes credentials
 
     _Commands_:
@@ -170,6 +164,68 @@ To install Prowler as a Python package, use `Python >= 3.10, <= 3.12`. Prowler i
   </Tab>
 </Tabs>
 
+## Updating Prowler CLI
+
+Upgrade Prowler CLI to the latest release using the same method chosen for installation:
+
+<Tabs>
+  <Tab title="pipx">
+    ```bash
+    pipx upgrade prowler
+    prowler -v
+    ```
+  </Tab>
+  <Tab title="pip">
+    ```bash
+    pip install --upgrade prowler
+    prowler -v
+    ```
+  </Tab>
+  <Tab title="Docker">
+    Pull the desired image tag to fetch the latest version:
+
+    ```bash
+    docker pull toniblyx/prowler:latest
+    ```
+
+    <Note>
+      Replace `latest` with a specific release tag (for example, `stable` or `<x.y.z>`) to pin a version. Refer to the [Container Versions](#container-versions) section for the full list of available tags.
+    </Note>
+  </Tab>
+  <Tab title="GitHub">
+    Pull the latest changes and sync the environment:
+
+    ```bash
+    cd prowler
+    git pull
+    uv sync
+    uv run python prowler-cli.py -v
+    ```
+
+    <Note>
+      To upgrade to a specific release, check out the corresponding tag before syncing: `git checkout <x.y.z>`.
+    </Note>
+  </Tab>
+  <Tab title="Brew">
+    ```bash
+    brew upgrade prowler
+    prowler -v
+    ```
+  </Tab>
+  <Tab title="CloudShell">
+    Both AWS CloudShell and Azure CloudShell install Prowler with `pipx`, so the upgrade command is the same:
+
+    ```bash
+    pipx upgrade prowler
+    prowler -v
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  To install a specific version instead of the latest release, pin it explicitly. For example, with `pipx`: `pipx install prowler==<x.y.z>`, or with `pip`: `pip install prowler==<x.y.z>`. The available releases are listed in the [Releases GitHub section](https://github.com/prowler-cloud/prowler/releases).
+</Note>
+
 ## Container Versions
 
 The available versions of Prowler CLI are the following:
@@ -178,9 +234,9 @@ The available versions of Prowler CLI are the following:
 - `v4-latest`: in sync with `v4` branch (please note that it is not a stable version)
 - `v3-latest`: in sync with `v3` branch (please note that it is not a stable version)
 - `<x.y.z>` (release): you can find the releases [here](https://github.com/prowler-cloud/prowler/releases), those are stable releases.
-- `stable`: this tag always point to the latest release.
-- `v4-stable`: this tag always point to the latest release for v4.
-- `v3-stable`: this tag always point to the latest release for v3.
+- `stable`: this tag always points to the latest release.
+- `v4-stable`: this tag always points to the latest release for v4.
+- `v3-stable`: this tag always points to the latest release for v3.
 
 The container images are available here:
 

@@ -1,7 +1,7 @@
 # =============================================================================
 # Build stage - Install dependencies and build the application
 # =============================================================================
-FROM ghcr.io/astral-sh/uv:python3.13-alpine@sha256:8f53782bb232ab0b5558f3071e86e2bbfde884e18815f2b19cc57f2d336e9ee2 AS builder
+FROM ghcr.io/astral-sh/uv:0.11.21-python3.13-alpine3.23@sha256:f09cc61ffc001f202701fdeae14dbdd50f6ca4cfcf248f41fd3234a302c8534f AS builder
 
 WORKDIR /app
 
@@ -25,9 +25,25 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # =============================================================================
 # Final stage - Minimal runtime environment
 # =============================================================================
-FROM python:3.13-alpine@sha256:bb1f2fdb1065c85468775c9d680dcd344f6442a2d1181ef7916b60a623f11d40
+FROM python:3.13.14-alpine3.23@sha256:9fdbf2e3e82628351513560b121e2ee6ce31cac212be9e070c5a5e2769fb5e76
 
 LABEL maintainer="https://github.com/prowler-cloud"
+
+# High CVEs fixed in Alpine 3.23 but not yet in the pinned base image:
+#   sqlite-libs 3.53.4-r0  CVE-2026-11822, CVE-2026-11824  (image ships 3.51.2-r0)
+#   libcrypto3/libssl3 3.5.8-r0  CVE-2026-14456            (image ships 3.5.7-r0)
+# The base image pins python 3.13.14, which has not been rebuilt since those
+# packages were published, so the upgrade is taken here rather than by moving
+# the pin -- the newest published python:3.13-alpine3.23 carries the same
+# vulnerable versions. libcrypto3 and libssl3 are both built from openssl and
+# are flagged separately, so both are named.
+# `>=` rather than `=`: Alpine keeps only the newest build of a package in a
+# branch's index, so an exact pin breaks this build the day one of these is
+# superseded. Drop an entry once the base image ships that version or later.
+RUN apk add --no-cache --upgrade \
+    "sqlite-libs>=3.53.4-r0" \
+    "libcrypto3>=3.5.8-r0" \
+    "libssl3>=3.5.8-r0"
 
 # Create non-root user for security
 # Using specific UID/GID for consistency across environments

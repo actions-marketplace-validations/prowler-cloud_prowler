@@ -2,7 +2,9 @@ from unittest import mock
 from uuid import uuid4
 
 from tests.providers.azure.azure_fixtures import (
+    AZURE_SUBSCRIPTION_DISPLAY,
     AZURE_SUBSCRIPTION_ID,
+    AZURE_SUBSCRIPTION_NAME,
     set_mocked_azure_provider,
 )
 
@@ -10,6 +12,7 @@ from tests.providers.azure.azure_fixtures import (
 class Test_app_function_access_keys_configured:
     def test_app_no_subscriptions(self):
         app_client = mock.MagicMock
+        app_client.subscriptions = {AZURE_SUBSCRIPTION_ID: AZURE_SUBSCRIPTION_NAME}
 
         with (
             mock.patch(
@@ -33,6 +36,7 @@ class Test_app_function_access_keys_configured:
 
     def test_app_subscription_empty(self):
         app_client = mock.MagicMock
+        app_client.subscriptions = {AZURE_SUBSCRIPTION_ID: AZURE_SUBSCRIPTION_NAME}
         app_client.functions = {AZURE_SUBSCRIPTION_ID: {}}
 
         with (
@@ -55,6 +59,7 @@ class Test_app_function_access_keys_configured:
 
     def test_app_function_no_keys(self):
         app_client = mock.MagicMock
+        app_client.subscriptions = {AZURE_SUBSCRIPTION_ID: AZURE_SUBSCRIPTION_NAME}
         app_client.functions = {AZURE_SUBSCRIPTION_ID: {}}
 
         with (
@@ -82,7 +87,7 @@ class Test_app_function_access_keys_configured:
                         location="West Europe",
                         kind="functionapp,linux",
                         function_keys={},
-                        enviroment_variables={},
+                        environment_variables={},
                         identity=None,
                         public_access=False,
                         vnet_subnet_id=None,
@@ -98,7 +103,7 @@ class Test_app_function_access_keys_configured:
             assert result[0].status == "FAIL"
             assert (
                 result[0].status_extended
-                == "Function function1 does not have function keys configured."
+                == f"Function function1 from subscription {AZURE_SUBSCRIPTION_DISPLAY} does not have function keys configured."
             )
             assert result[0].resource_id == function_id
             assert result[0].resource_name == "function1"
@@ -107,6 +112,7 @@ class Test_app_function_access_keys_configured:
 
     def test_app_function_using_functions_keys(self):
         app_client = mock.MagicMock
+        app_client.subscriptions = {AZURE_SUBSCRIPTION_ID: AZURE_SUBSCRIPTION_NAME}
         app_client.functions = {AZURE_SUBSCRIPTION_ID: {}}
 
         with (
@@ -137,7 +143,7 @@ class Test_app_function_access_keys_configured:
                             "default": "key1",
                             "key2": "key2",
                         },
-                        enviroment_variables={},
+                        environment_variables={},
                         identity=None,
                         public_access=False,
                         vnet_subnet_id=None,
@@ -153,7 +159,7 @@ class Test_app_function_access_keys_configured:
             assert result[0].status == "PASS"
             assert (
                 result[0].status_extended
-                == "Function function1 has function keys configured."
+                == f"Function function1 from subscription {AZURE_SUBSCRIPTION_DISPLAY} has function keys configured."
             )
             assert result[0].resource_id == function_id
             assert result[0].resource_name == "function1"

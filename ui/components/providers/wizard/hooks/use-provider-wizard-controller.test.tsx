@@ -3,23 +3,33 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useOrgSetupStore } from "@/store/organizations/store";
 import { useProviderWizardStore } from "@/store/provider-wizard/store";
-import { ORG_WIZARD_STEP } from "@/types/organizations";
+import { ORG_WIZARD_STEP, ORGANIZATION_TYPE } from "@/types/organizations";
 import {
   PROVIDER_WIZARD_MODE,
   PROVIDER_WIZARD_STEP,
 } from "@/types/provider-wizard";
 
 import type { ProviderWizardInitialData } from "../types";
+
 import { useProviderWizardController } from "./use-provider-wizard-controller";
 
-const { refreshMock } = vi.hoisted(() => ({
+const { refreshMock, requestOpenOnWizardCloseMock } = vi.hoisted(() => ({
   refreshMock: vi.fn(),
+  requestOpenOnWizardCloseMock: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({
     refresh: refreshMock,
   }),
+}));
+
+vi.mock("@/store/onboarding-checkpoint", () => ({
+  useOnboardingCheckpointStore: {
+    getState: () => ({
+      requestOpenOnWizardClose: requestOpenOnWizardCloseMock,
+    }),
+  },
 }));
 
 vi.mock("next-auth/react", () => ({
@@ -33,8 +43,11 @@ describe("useProviderWizardController", () => {
   beforeEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
+    requestOpenOnWizardCloseMock.mockClear();
     sessionStorage.clear();
     localStorage.clear();
+    // Checkpoint is Cloud-only.
+    vi.stubEnv("UI_CLOUD_ENABLED", "true");
     useProviderWizardStore.getState().reset();
     useOrgSetupStore.getState().reset();
   });
@@ -56,6 +69,78 @@ describe("useProviderWizardController", () => {
 
     // Then
     expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("requests the onboarding checkpoint with providerConnected:true when a provider was created", () => {
+    const onOpenChange = vi.fn();
+    const { result } = renderHook(() =>
+      useProviderWizardController({
+        open: true,
+        onOpenChange,
+      }),
+    );
+    act(() => {
+      useProviderWizardStore.getState().setProvider({
+        id: "provider-1",
+        type: "aws",
+        uid: "111111111111",
+        alias: "production",
+      });
+    });
+
+    act(() => {
+      result.current.handleClose();
+    });
+
+    // providerId is read before the store reset clears it.
+    expect(requestOpenOnWizardCloseMock).toHaveBeenCalledWith({
+      providerConnected: true,
+    });
+  });
+
+  it("requests the onboarding checkpoint with providerConnected:false when no provider was created", () => {
+    const onOpenChange = vi.fn();
+    const { result } = renderHook(() =>
+      useProviderWizardController({
+        open: true,
+        onOpenChange,
+      }),
+    );
+
+    act(() => {
+      result.current.handleClose();
+    });
+
+    expect(requestOpenOnWizardCloseMock).toHaveBeenCalledWith({
+      providerConnected: false,
+    });
+  });
+
+  it("does not request the onboarding checkpoint in self-hosted (OSS) deployments", () => {
+    vi.stubEnv("UI_CLOUD_ENABLED", "false");
+    const onOpenChange = vi.fn();
+    const { result } = renderHook(() =>
+      useProviderWizardController({
+        open: true,
+        onOpenChange,
+      }),
+    );
+    act(() => {
+      useProviderWizardStore.getState().setProvider({
+        id: "provider-1",
+        type: "aws",
+        uid: "111111111111",
+        alias: "production",
+      });
+    });
+
+    act(() => {
+      result.current.handleClose();
+    });
+
+    // Checkpoint stays untouched, but the close still refreshes.
+    expect(requestOpenOnWizardCloseMock).not.toHaveBeenCalled();
     expect(refreshMock).toHaveBeenCalledTimes(1);
   });
 
@@ -85,8 +170,10 @@ describe("useProviderWizardController", () => {
     });
     expect(result.current.modalTitle).toBe("Update Provider Credentials");
     expect(result.current.isProviderFlow).toBe(true);
+    // Update mode enters at the credentials step, so the docs link scrolls
+    // the getting-started page to the credentials/authentication section.
     expect(result.current.docsLink).toBe(
-      "https://goto.prowler.com/provider-aws",
+      "https://docs.prowler.com/user-guide/providers/aws/getting-started-aws#step-3-set-up-aws-authentication",
     );
 
     const state = useProviderWizardStore.getState();
@@ -96,6 +183,36 @@ describe("useProviderWizardController", () => {
     expect(state.providerAlias).toBe("production");
     expect(state.secretId).toBe("secret-1");
     expect(state.mode).toBe(PROVIDER_WIZARD_MODE.UPDATE);
+  });
+
+  it("updates the credentials docs link when AWS assume role is selected", async () => {
+    const onOpenChange = vi.fn();
+    const { result } = renderHook(() =>
+      useProviderWizardController({
+        open: true,
+        onOpenChange,
+        initialData: {
+          providerId: "provider-1",
+          providerType: "aws",
+          providerUid: "111111111111",
+          providerAlias: "production",
+          secretId: null,
+          mode: PROVIDER_WIZARD_MODE.ADD,
+        },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.currentStep).toBe(PROVIDER_WIZARD_STEP.CREDENTIALS);
+    });
+
+    act(() => {
+      useProviderWizardStore.getState().setVia("role");
+    });
+
+    expect(result.current.docsLink).toBe(
+      "https://docs.prowler.com/user-guide/providers/aws/getting-started-aws#assume-role-recommended",
+    );
   });
 
   it("switches into and out of organizations flow", () => {
@@ -117,6 +234,10 @@ describe("useProviderWizardController", () => {
     expect(result.current.wizardVariant).toBe("organizations");
     expect(result.current.isProviderFlow).toBe(false);
     expect(result.current.orgCurrentStep).toBe(ORG_WIZARD_STEP.SETUP);
+    // The flow tags the store with the type it was opened for; AWS by default.
+    expect(useOrgSetupStore.getState().organizationType).toBe(
+      ORGANIZATION_TYPE.AWS,
+    );
     expect(result.current.docsLink).toBe(
       "https://docs.prowler.com/user-guide/tutorials/prowler-cloud-aws-organizations",
     );
@@ -181,7 +302,7 @@ describe("useProviderWizardController", () => {
       result.current.handleTestSuccess();
     });
 
-    // Then: credential rotation never surfaces the launch/schedule step
+    // Credential rotation skips the launch/schedule step.
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect(refreshMock).toHaveBeenCalledTimes(1);
     expect(result.current.currentStep).not.toBe(PROVIDER_WIZARD_STEP.LAUNCH);
@@ -229,9 +350,10 @@ describe("useProviderWizardController", () => {
         .getState()
         .setOrganization("org-1", "My Org", "o-abc123def4");
       useOrgSetupStore.getState().setDiscovery("disc-1", {
-        roots: [],
-        organizational_units: [],
-        accounts: [],
+        orgType: ORGANIZATION_TYPE.AWS,
+        organization: { uid: "o-abc123def4", name: "My Org" },
+        nodes: [],
+        candidates: [],
       });
     });
 
@@ -280,7 +402,7 @@ describe("useProviderWizardController", () => {
       result.current.setCurrentStep(PROVIDER_WIZARD_STEP.TEST);
     });
 
-    // When: provider data refreshes while modal is still open
+    // Provider data refreshes while modal is still open — user progress must be kept.
     rerender({
       open: true,
       initialData: {
@@ -293,7 +415,6 @@ describe("useProviderWizardController", () => {
       },
     });
 
-    // Then: keep user progress in the current flow
     expect(result.current.currentStep).toBe(PROVIDER_WIZARD_STEP.TEST);
     expect(useProviderWizardStore.getState().via).toBe("service-account");
   });

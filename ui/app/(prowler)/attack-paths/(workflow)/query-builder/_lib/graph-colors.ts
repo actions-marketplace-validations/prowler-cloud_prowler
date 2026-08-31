@@ -1,3 +1,10 @@
+import {
+  GROUP_NODE_LABEL,
+  GROUP_PROPS,
+  OUTCOME_NODE_LABEL,
+} from "./group-graph";
+import { isProwlerFindingNode } from "./node-types";
+
 /**
  * Color constants for attack path graph visualization
  * Colors chosen to work well in both light and dark themes
@@ -54,11 +61,17 @@ export const GRAPH_NODE_BORDER_COLORS = {
 // Edge colors per theme
 export const GRAPH_EDGE_COLOR_DARK = "#ffffff"; // White for dark theme
 export const GRAPH_EDGE_COLOR_LIGHT = "#1e293b"; // Slate 800 for light theme
-export const GRAPH_EDGE_HIGHLIGHT_COLOR = "#f97316"; // Orange 500 (on hover)
-export const GRAPH_EDGE_GLOW_COLOR = "#fb923c";
+export const GRAPH_EDGE_HIGHLIGHT_COLOR = "#34d399"; // Prowler green (hover/selection)
+export const GRAPH_EDGE_GLOW_COLOR = "#6ee7b7";
 export const GRAPH_SELECTION_COLOR = "#ffffff";
 export const GRAPH_BORDER_COLOR = "#374151";
 export const GRAPH_ALERT_BORDER_COLOR = "#ef4444"; // Red 500 - for resources with findings
+
+// Terminal outcome node: distinct orange, independent of the resource palette.
+export const GRAPH_OUTCOME_FILL_COLOR = "#c2410c"; // Orange 700
+export const GRAPH_OUTCOME_BORDER_COLOR = "#f97316"; // Orange 500
+// Outline behind a group node's count badge, for contrast on any fill.
+export const GRAPH_COUNT_BADGE_STROKE_COLOR = "#0b1120"; // Slate 950
 
 /**
  * Get node fill color based on labels and properties
@@ -67,7 +80,16 @@ export const getNodeColor = (
   labels: string[],
   properties?: Record<string, unknown>,
 ): string => {
-  const isFinding = labels.some((l) => l.toLowerCase().includes("finding"));
+  if (labels.includes(OUTCOME_NODE_LABEL)) {
+    return GRAPH_OUTCOME_FILL_COLOR;
+  }
+
+  if (labels.includes(GROUP_NODE_LABEL)) {
+    const classLabel = String(properties?.[GROUP_PROPS.CLASS] ?? "");
+    return getNodeColor([classLabel]);
+  }
+
+  const isFinding = isProwlerFindingNode(labels);
   if (isFinding && properties?.severity) {
     const severity = String(properties.severity).toLowerCase();
     if (severity === "critical") return GRAPH_NODE_COLORS.critical;
@@ -100,7 +122,20 @@ export const getNodeBorderColor = (
   labels: string[],
   properties?: Record<string, unknown>,
 ): string => {
-  const isFinding = labels.some((l) => l.toLowerCase().includes("finding"));
+  if (labels.includes(OUTCOME_NODE_LABEL)) {
+    return GRAPH_OUTCOME_BORDER_COLOR;
+  }
+
+  if (labels.includes(GROUP_NODE_LABEL)) {
+    if (properties?.[GROUP_PROPS.HAS_FINDINGS]) {
+      return GRAPH_ALERT_BORDER_COLOR;
+    }
+
+    const classLabel = String(properties?.[GROUP_PROPS.CLASS] ?? "");
+    return getNodeBorderColor([classLabel]);
+  }
+
+  const isFinding = isProwlerFindingNode(labels);
   if (isFinding && properties?.severity) {
     const severity = String(properties.severity).toLowerCase();
     if (severity === "critical") return GRAPH_NODE_BORDER_COLORS.critical;
@@ -126,6 +161,37 @@ export const getNodeBorderColor = (
     return GRAPH_NODE_BORDER_COLORS.securityGroup;
 
   return GRAPH_NODE_BORDER_COLORS.default;
+};
+
+interface ResolveNodeColorsParams {
+  labels: string[];
+  properties?: Record<string, unknown>;
+  selected?: boolean;
+  hasFindings?: boolean;
+}
+
+interface NodeColorResult {
+  fillColor: string;
+  borderColor: string;
+}
+
+/**
+ * Resolve fill and border colors for a graph node, layering selection and
+ * finding-alert state on top of the label/severity defaults.
+ */
+export const resolveNodeColors = ({
+  labels,
+  properties,
+  selected,
+  hasFindings,
+}: ResolveNodeColorsParams): NodeColorResult => {
+  const fillColor = getNodeColor(labels, properties);
+  const borderColor = selected
+    ? GRAPH_EDGE_HIGHLIGHT_COLOR
+    : hasFindings
+      ? GRAPH_ALERT_BORDER_COLOR
+      : getNodeBorderColor(labels, properties);
+  return { fillColor, borderColor };
 };
 
 /**
