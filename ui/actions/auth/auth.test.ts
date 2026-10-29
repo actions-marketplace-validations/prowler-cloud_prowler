@@ -23,7 +23,7 @@ vi.mock("@/lib/sentry-breadcrumbs", () => ({
 
 import { createNewUser, getUserByMe } from "./auth";
 
-const userMeResponse = (roleAttributes: Record<string, boolean>) => ({
+const userMeResponse = (roleAttributes: Record<string, unknown>) => ({
   data: {
     type: "users",
     id: "019b1234-5678-7abc-9def-0123456789ab",
@@ -43,7 +43,7 @@ const userMeResponse = (roleAttributes: Record<string, boolean>) => ({
   ],
 });
 
-const mockUserMe = (roleAttributes: Record<string, boolean>) => {
+const mockUserMe = (roleAttributes: Record<string, unknown>) => {
   fetchMock.mockResolvedValue(
     new Response(JSON.stringify(userMeResponse(roleAttributes)), {
       status: 200,
@@ -132,6 +132,29 @@ describe("auth actions", () => {
     expect(requestUrl.searchParams.get("utm_source")).toBe("blackhat");
   });
 
+  it("should carry manage_ingestions into the session permissions", async () => {
+    // Given
+    mockUserMe({ manage_ingestions: true });
+
+    // When
+    const result = await getUserByMe("access-token");
+
+    // Then
+    expect(result.permissions.manage_ingestions).toBe(true);
+  });
+
+  it("should default manage_ingestions to false when the role omits it", async () => {
+    // Given
+    mockUserMe({ manage_scans: true });
+
+    // When
+    const result = await getUserByMe("access-token");
+
+    // Then
+    expect(result.permissions.manage_ingestions).toBe(false);
+    expect(result.permissions.manage_scans).toBe(true);
+  });
+
   it("should carry manage_lighthouse_ai_configuration into the session permissions", async () => {
     // Given
     mockUserMe({ manage_lighthouse_ai_configuration: true });
@@ -155,6 +178,30 @@ describe("auth actions", () => {
     expect(result.permissions.manage_users).toBe(true);
   });
 
+  it("should carry an exact manage_registry permission into the session", async () => {
+    // Given
+    mockUserMe({ manage_registry: true });
+
+    // When
+    const result = await getUserByMe("access-token");
+
+    // Then
+    expect(result.permissions.manage_registry).toBe(true);
+  });
+
+  it.each([undefined, "true", "TRUE", 1])(
+    "should deny a malformed manage_registry value of %j",
+    async (manageRegistry) => {
+      // Given
+      mockUserMe({ manage_registry: manageRegistry });
+
+      // When
+      const result = await getUserByMe("access-token");
+
+      // Then
+      expect(result.permissions.manage_registry).toBe(false);
+    },
+  );
   it("should forward an abort signal when loading the current user", async () => {
     // Given
     mockUserMe({ manage_users: true });
